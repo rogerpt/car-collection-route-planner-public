@@ -55,7 +55,7 @@
             <div id="map"></div>
             
             <div class="route-info">
-                <h3>Route Order (starts with BA68FSO as requested)</h3>
+                <h3>Route Order (starts with BA68FSO first)</h3>
                 <div id="routeSteps"></div>
                 <div id="totalDistance" class="total-distance"></div>
             </div>
@@ -69,6 +69,15 @@
         let markers = [];
         let routeLine = null;
 
+        // Pre-geocoded sample data so it works even when the API is blocked
+        const SAMPLE = [
+            { reg: 'BA68FSO', postcode: 'SK4 4BJ', lat: 53.423353, lng: -2.191776 },
+            { reg: 'MM69XYP', postcode: 'L31 0BH', lat: 53.519906, lng: -2.939849 },
+            { reg: 'MF69VDZ', postcode: 'WA8 5BP', lat: 53.391781, lng: -2.733209 },
+            { reg: 'LJ700XK', postcode: 'WA16 0AZ', lat: 53.301934, lng: -2.387816 },
+            { reg: 'YL65KBX', postcode: 'CW12 4ZG', lat: 53.172219, lng: -2.253232 }
+        ];
+
         function addCar() {
             const reg = document.getElementById('regInput').value.trim().toUpperCase();
             let postcode = document.getElementById('postcodeInput').value.trim().toUpperCase();
@@ -78,9 +87,7 @@
                 return;
             }
             
-            // Normalise postcode (add space if missing)
             postcode = normalisePostcode(postcode);
-            
             cars.push({ reg, postcode });
             document.getElementById('regInput').value = '';
             document.getElementById('postcodeInput').value = '';
@@ -89,7 +96,6 @@
         }
 
         function normalisePostcode(pc) {
-            // Remove all spaces then insert the space before the last 3 characters
             const clean = pc.replace(/\s+/g, '').toUpperCase();
             if (clean.length > 3) {
                 return clean.slice(0, -3) + ' ' + clean.slice(-3);
@@ -105,7 +111,6 @@
         function renderCarList() {
             const container = document.getElementById('carList');
             const count = document.getElementById('carCount');
-            
             count.textContent = cars.length;
             
             if (cars.length === 0) {
@@ -122,14 +127,7 @@
         }
 
         function useSampleData() {
-            // BA68FSO first as requested in the original message
-            cars = [
-                { reg: 'BA68FSO', postcode: 'SK4 4BJ' },
-                { reg: 'MM69XYP', postcode: 'L31 0BH' },
-                { reg: 'MF69VDZ', postcode: 'WA8 5BP' },
-                { reg: 'LJ700XK', postcode: 'WA16 0AZ' },
-                { reg: 'YL65KBX', postcode: 'CW12 4ZG' }
-            ];
+            cars = SAMPLE.map(c => ({ ...c }));
             renderCarList();
             hideError();
         }
@@ -137,10 +135,7 @@
         function clearAll() {
             cars = [];
             document.getElementById('mapSection').style.display = 'none';
-            if (map) {
-                map.remove();
-                map = null;
-            }
+            if (map) { map.remove(); map = null; }
             renderCarList();
             hideError();
         }
@@ -158,7 +153,7 @@
         async function geocodePostcode(postcode) {
             const clean = postcode.replace(/\s+/g, '');
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+            const timeout = setTimeout(() => controller.abort(), 6000);
 
             try {
                 const response = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(clean)}`, {
@@ -175,7 +170,7 @@
                 }
             } catch (e) {
                 clearTimeout(timeout);
-                console.error('Geocoding error for', postcode, e);
+                console.error('Geocoding error:', e);
             }
             return null;
         }
@@ -197,7 +192,7 @@
             
             const visited = new Array(n).fill(false);
             const route = [];
-            let current = 0; // start at first (BA68FSO)
+            let current = 0;
             visited[0] = true;
             route.push(locations[0]);
             
@@ -224,7 +219,6 @@
                     current = nearest;
                 }
             }
-            
             return route;
         }
 
@@ -242,7 +236,7 @@
             const statusDiv = document.createElement('div');
             statusDiv.id = 'statusToast';
             statusDiv.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:white;padding:12px 24px;border-radius:20px;z-index:1000;font-size:15px;';
-            statusDiv.textContent = 'Looking up postcodes...';
+            statusDiv.textContent = 'Preparing route...';
             document.body.appendChild(statusDiv);
 
             try {
@@ -250,25 +244,34 @@
 
                 for (let i = 0; i < cars.length; i++) {
                     const car = cars[i];
-                    statusDiv.textContent = `Looking up ${i + 1} of ${cars.length}: ${car.postcode}`;
-                    
-                    const coords = await geocodePostcode(car.postcode);
-                    if (coords) {
+                    statusDiv.textContent = `Processing ${i + 1} of ${cars.length}...`;
+
+                    // Use pre-loaded coordinates if available (sample data)
+                    if (car.lat && car.lng) {
                         locations.push({
-                            lat: coords.lat,
-                            lng: coords.lng,
+                            lat: car.lat,
+                            lng: car.lng,
                             reg: car.reg,
-                            postcode: coords.postcode || car.postcode
+                            postcode: car.postcode
                         });
                     } else {
-                        throw new Error(`Could not find postcode: ${car.postcode}. Please check it is a valid UK postcode.`);
+                        // Geocode new cars
+                        const coords = await geocodePostcode(car.postcode);
+                        if (coords) {
+                            locations.push({
+                                lat: coords.lat,
+                                lng: coords.lng,
+                                reg: car.reg,
+                                postcode: coords.postcode || car.postcode
+                            });
+                        } else {
+                            throw new Error(`Could not find postcode: ${car.postcode}`);
+                        }
                     }
                 }
 
-                statusDiv.textContent = 'Calculating best route...';
-
-                // Small delay so user sees the message
-                await new Promise(r => setTimeout(r, 300));
+                statusDiv.textContent = 'Calculating best order...';
+                await new Promise(r => setTimeout(r, 200));
 
                 const route = nearestNeighbourRoute(locations);
 
@@ -283,15 +286,16 @@
                 renderMap(route, totalDist);
 
                 document.getElementById('mapSection').style.display = 'block';
-                document.getElementById('mapSection').scrollIntoView({ behavior: 'smooth' });
+                setTimeout(() => {
+                    document.getElementById('mapSection').scrollIntoView({ behavior: 'smooth' });
+                }, 100);
 
             } catch (err) {
                 showError(err.message || 'Something went wrong. Please try again.');
                 console.error(err);
             } finally {
-                if (document.getElementById('statusToast')) {
-                    document.body.removeChild(statusDiv);
-                }
+                const toast = document.getElementById('statusToast');
+                if (toast) toast.remove();
                 calcBtn.disabled = false;
                 calcBtn.textContent = 'Calculate Most Efficient Route';
             }
@@ -321,7 +325,10 @@
             if (routeLine) routeLine.remove();
             routeLine = L.polyline(latlngs, { color: '#007bff', weight: 4 }).addTo(map);
             
-            map.fitBounds(latlngs, { padding: [50, 50] });
+            map.fitBounds(latlngs, { padding: [40, 40] });
+            
+            // Force map to recalculate size (important on mobile)
+            setTimeout(() => map.invalidateSize(), 200);
             
             const stepsContainer = document.getElementById('routeSteps');
             stepsContainer.innerHTML = route.map((loc, index) => 
