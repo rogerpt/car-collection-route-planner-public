@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Collection Route Planner</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #333; }
+        .input-section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+        input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 150px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .car-list { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .car-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
+        .car-item:last-child { border-bottom: none; }
+        .delete-btn { background: #dc3545; padding: 5px 10px; }
+        .delete-btn:hover { background: #c82333; }
+        #map { height: 500px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .route-info { background: white; padding: 20px; border-radius: 8px; margin-top: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .route-step { padding: 8px 0; border-bottom: 1px solid #eee; }
+        .route-step:last-child { border-bottom: none; }
+        .total-distance { font-weight: bold; margin-top: 10px; padding-top: 10px; border-top: 2px solid #007bff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚗 Car Collection Route Planner</h1>
+        
+        <div class="input-section">
+            <h2>Add Car</h2>
+            <div class="form-row">
+                <input type="text" id="regInput" placeholder="Registration (e.g. BA68FSO)" />
+                <input type="text" id="postcodeInput" placeholder="Postcode (e.g. SK4 4BJ)" />
+                <button onclick="addCar()">Add Car</button>
+            </div>
+            <button onclick="useSampleData()" style="background: #28a745;">Load Sample Data</button>
+        </div>
+
+        <div class="car-list">
+            <h2>Cars to Collect (<span id="carCount">0</span>)</h2>
+            <div id="carList"></div>
+            <button onclick="calculateRoute()" style="margin-top: 15px; background: #28a745; width: 100%;">Calculate Most Efficient Route</button>
+            <button onclick="clearAll()" style="margin-top: 10px; background: #6c757d; width: 100%;">Clear All</button>
+        </div>
+
+        <div id="mapSection" style="display: none;">
+            <h2>Route Map</h2>
+            <div id="map"></div>
+            
+            <div class="route-info">
+                <h3>Route Order</h3>
+                <div id="routeSteps"></div>
+                <div id="totalDistance" class="total-distance"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        let cars = [];
+        let map = null;
+        let markers = [];
+        let routeLine = null;
+
+        function addCar() {
+            const reg = document.getElementById('regInput').value.trim().toUpperCase();
+            const postcode = document.getElementById('postcodeInput').value.trim().toUpperCase();
+            
+            if (!reg || !postcode) {
+                alert('Please enter both registration and postcode');
+                return;
+            }
+            
+            // Basic postcode validation
+            if (!/^[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}$/.test(postcode.replace(/\s/g, ''))) {
+                if (!confirm('Postcode format looks unusual. Add anyway?')) return;
+            }
+            
+            cars.push({ reg, postcode });
+            document.getElementById('regInput').value = '';
+            document.getElementById('postcodeInput').value = '';
+            renderCarList();
+        }
+
+        function deleteCar(index) {
+            cars.splice(index, 1);
+            renderCarList();
+        }
+
+        function renderCarList() {
+            const container = document.getElementById('carList');
+            const count = document.getElementById('carCount');
+            
+            count.textContent = cars.length;
+            
+            if (cars.length === 0) {
+                container.innerHTML = '<p style="color: #666;">No cars added yet</p>';
+                return;
+            }
+            
+            container.innerHTML = cars.map((car, index) => `
+                <div class="car-item">
+                    <span><strong>${car.reg}</strong> — ${car.postcode}</span>
+                    <button class="delete-btn" onclick="deleteCar(${index})">Remove</button>
+                </div>
+            `).join('');
+        }
+
+        function useSampleData() {
+            cars = [
+                { reg: 'MM69XYP', postcode: 'L31 0BH' },
+                { reg: 'MF69VDZ', postcode: 'WA8 5BP' },
+                { reg: 'LJ700XK', postcode: 'WA16 0AZ' },
+                { reg: 'YL65KBX', postcode: 'CW12 4ZG' },
+                { reg: 'BA68FSO', postcode: 'SK4 4BJ' }
+            ];
+            renderCarList();
+        }
+
+        function clearAll() {
+            cars = [];
+            document.getElementById('mapSection').style.display = 'none';
+            if (map) {
+                map.remove();
+                map = null;
+            }
+            renderCarList();
+        }
+
+        async function geocodePostcode(postcode) {
+            // Using postcodes.io API (free, no key needed)
+            try {
+                const response = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`);
+                const data = await response.json();
+                if (data.status === 200) {
+                    return { lat: data.result.latitude, lng: data.result.longitude };
+                }
+            } catch (e) {
+                console.error('Geocoding error:', e);
+            }
+            return null;
+        }
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Earth's radius in km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        function nearestNeighbourRoute(locations) {
+            // locations: array of {lat, lng, reg, postcode, index}
+            const n = locations.length;
+            if (n === 0) return [];
+            
+            const visited = new Array(n).fill(false);
+            const route = [];
+            let current = 0; // start at first location
+            visited[0] = true;
+            route.push(locations[0]);
+            
+            for (let i = 1; i < n; i++) {
+                let nearest = -1;
+                let minDist = Infinity;
+                
+                for (let j = 0; j < n; j++) {
+                    if (!visited[j]) {
+                        const dist = calculateDistance(
+                            locations[current].lat, locations[current].lng,
+                            locations[j].lat, locations[j].lng
+                        );
+                        if (dist < minDist) {
+                            minDist = dist;
+                            nearest = j;
+                        }
+                    }
+                }
+                
+                if (nearest !== -1) {
+                    visited[nearest] = true;
+                    route.push(locations[nearest]);
+                    current = nearest;
+                }
+            }
+            
+            return route;
+        }
+
+        async function calculateRoute() {
+            if (cars.length === 0) {
+                alert('Add some cars first');
+                return;
+            }
+            
+            const statusDiv = document.createElement('div');
+            statusDiv.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:white;padding:10px 20px;border-radius:20px;z-index:1000;';
+            statusDiv.textContent = 'Geocoding postcodes...';
+            document.body.appendChild(statusDiv);
+            
+            // Geocode all postcodes
+            const locations = [];
+            for (let i = 0; i < cars.length; i++) {
+                const car = cars[i];
+                const coords = await geocodePostcode(car.postcode);
+                if (coords) {
+                    locations.push({
+                        ...coords,
+                        reg: car.reg,
+                        postcode: car.postcode,
+                        originalIndex: i
+                    });
+                } else {
+                    alert(`Could not find postcode: ${car.postcode}`);
+                    document.body.removeChild(statusDiv);
+                    return;
+                }
+            }
+            
+            statusDiv.textContent = 'Calculating optimal route...';
+            
+            // Calculate nearest neighbour route
+            const route = nearestNeighbourRoute(locations);
+            
+            // Calculate total distance
+            let totalDist = 0;
+            for (let i = 0; i < route.length - 1; i++) {
+                totalDist += calculateDistance(
+                    route[i].lat, route[i].lng,
+                    route[i+1].lat, route[i+1].lng
+                );
+            }
+            
+            // Render map
+            renderMap(route, totalDist);
+            
+            document.body.removeChild(statusDiv);
+            document.getElementById('mapSection').style.display = 'block';
+            document.getElementById('mapSection').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function renderMap(route, totalDist) {
+            const mapContainer = document.getElementById('map');
+            
+            // Remove existing map
+            if (map) {
+                map.remove();
+            }
+            
+            // Create new map
+            map = L.map('map').setView([route[0].lat, route[0].lng], 9);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+            
+            // Clear old markers
+            markers = [];
+            
+            // Add markers
+            route.forEach((loc, index) => {
+                const marker = L.marker([loc.lat, loc.lng])
+                    .addTo(map)
+                    .bindPopup(`<strong>${index + 1}. ${loc.reg}</strong><br>${loc.postcode}`);
+                markers.push(marker);
+            });
+            
+            // Draw route line
+            const latlngs = route.map(loc => [loc.lat, loc.lng]);
+            if (routeLine) routeLine.remove();
+            routeLine = L.polyline(latlngs, { color: '#007bff', weight: 4 }).addTo(map);
+            
+            // Fit bounds
+            map.fitBounds(latlngs, { padding: [50, 50] });
+            
+            // Render route steps
+            const stepsContainer = document.getElementById('routeSteps');
+            stepsContainer.innerHTML = route.map((loc, index) => 
+                `<div class="route-step">${index + 1}. <strong>${loc.reg}</strong> — ${loc.postcode}</div>`
+            ).join('');
+            
+            document.getElementById('totalDistance').innerHTML = 
+                `Total distance: <strong>${totalDist.toFixed(1)} km</strong> (approximate, as-the-crow-flies)`;
+        }
+
+        // Allow Enter key to add car
+        document.getElementById('postcodeInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') addCar();
+        });
+        document.getElementById('regInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') document.getElementById('postcodeInput').focus();
+        });
+
+        // Initial render
+        renderCarList();
+    </script>
+</body>
+</html>
