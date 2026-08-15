@@ -28,6 +28,8 @@
         .instructions { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-top: 15px; line-height: 1.5; }
         .instructions h4 { margin-top: 0; margin-bottom: 10px; }
         .instruction-line { margin: 8px 0; padding-left: 10px; border-left: 3px solid #007bff; }
+        .instructions.route2 { background: #fef3e8; }
+        .instructions.route2 .instruction-line { border-left-color: #e67e22; }
         label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
         .start-end-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         @media (max-width: 600px) { .start-end-grid { grid-template-columns: 1fr; } }
@@ -40,13 +42,18 @@
         .waze-small { background: #33ccff; color: #00334d; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; }
         .waze-small:hover { background: #1ab8f0; }
         .note { font-size: 13px; color: #666; margin-top: 8px; }
+        .split-btn { background: #9b59b6; width: 100%; margin-top: 10px; }
+        .split-btn:hover { background: #8e44ad; }
+        .pool-badge { background: #e67e22; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 6px; }
+        .route-header { font-size: 16px; font-weight: 700; margin: 18px 0 8px; padding-bottom: 6px; border-bottom: 2px solid #ddd; }
+        .route-header.r1 { color: #007bff; border-color: #007bff; }
+        .route-header.r2 { color: #e67e22; border-color: #e67e22; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚗 Car Collection Route Planner</h1>
         
-        <!-- Key Collection Start + Destination Drop-off -->
         <div class="start-end-section">
             <h2>Start & Destination</h2>
             <div class="start-end-grid">
@@ -80,7 +87,9 @@
             <h2>Cars to Collect (<span id="carCount">0</span>)</h2>
             <div id="carList"></div>
             <div id="errorBox" class="error-box"></div>
-            <button id="calcBtn" onclick="calculateRoute()" style="margin-top: 15px; background: #28a745; width: 100%;">Calculate Most Efficient Route</button>
+            <button id="calcBtn" onclick="calculateRoute(false)" style="margin-top: 15px; background: #28a745; width: 100%;">Calculate Most Efficient Route</button>
+            <button id="splitBtn" onclick="calculateRoute(true)" class="split-btn" style="display: none;">Split into 2 Routes + 2nd Pool</button>
+            <p id="splitNote" class="note" style="display: none;">More than 3 cars detected. You can split the work into two routes and use one stop as a 2nd pool / handover point.</p>
             <button onclick="clearAll()" style="margin-top: 10px; background: #6c757d; width: 100%;">Clear All</button>
         </div>
 
@@ -89,19 +98,15 @@
             <div id="map"></div>
             
             <div class="route-info">
-                <h3>Route Order</h3>
+                <h3 id="routeTitle">Route Order</h3>
                 
-                <!-- Navigation buttons -->
                 <div class="nav-buttons" id="navButtons"></div>
-                <p class="note">Waze only supports one destination at a time. Use the buttons above to open the first stop, then use the individual Waze links next to each stop.</p>
+                <p class="note">Waze only supports one destination at a time. Use the buttons above or the individual Waze links next to each stop.</p>
                 
                 <div id="routeSteps"></div>
                 <div id="totalDistance" class="total-distance"></div>
 
-                <div class="instructions" id="writtenInstructions">
-                    <h4>Written Instructions</h4>
-                    <div id="instructionLines"></div>
-                </div>
+                <div id="writtenInstructions"></div>
             </div>
         </div>
     </div>
@@ -111,10 +116,8 @@
         let cars = [];
         let map = null;
         let markers = [];
-        let routeLine = null;
-        let lastRoute = [];
+        let routeLines = [];
 
-        // Pre-geocoded sample data
         const SAMPLE = [
             { driver: 'A', reg: 'BA68FSO', postcode: 'SK4 4BJ', lat: 53.423353, lng: -2.191776 },
             { driver: 'A', reg: 'MM69XYP', postcode: 'L31 0BH', lat: 53.519906, lng: -2.939849 },
@@ -146,6 +149,7 @@
             document.getElementById('postcodeInput').value = '';
             renderCarList();
             hideError();
+            updateSplitButton();
         }
 
         function normalisePostcode(pc) {
@@ -159,6 +163,13 @@
         function deleteCar(index) {
             cars.splice(index, 1);
             renderCarList();
+            updateSplitButton();
+        }
+
+        function updateSplitButton() {
+            const show = cars.length > 3;
+            document.getElementById('splitBtn').style.display = show ? 'block' : 'none';
+            document.getElementById('splitNote').style.display = show ? 'block' : 'none';
         }
 
         function renderCarList() {
@@ -183,6 +194,7 @@
             cars = SAMPLE.map(c => ({ ...c }));
             renderCarList();
             hideError();
+            updateSplitButton();
         }
 
         function clearAll() {
@@ -191,6 +203,7 @@
             if (map) { map.remove(); map = null; }
             renderCarList();
             hideError();
+            updateSplitButton();
         }
 
         function showError(msg) {
@@ -229,7 +242,7 @@
         }
 
         function calculateDistance(lat1, lon1, lat2, lon2) {
-            const R = 3958.8; // miles
+            const R = 3958.8;
             const dLat = (lat2 - lat1) * Math.PI / 180;
             const dLon = (lon2 - lon1) * Math.PI / 180;
             const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
@@ -240,7 +253,6 @@
         }
 
         function nearestNeighbourRoute(locations) {
-            // locations[0] is start, last is end — optimise the middle points only
             const n = locations.length;
             if (n <= 2) return locations;
             
@@ -260,10 +272,7 @@
                 
                 for (let j = 0; j < middle.length; j++) {
                     if (!visited[j]) {
-                        const dist = calculateDistance(
-                            current.lat, current.lng,
-                            middle[j].lat, middle[j].lng
-                        );
+                        const dist = calculateDistance(current.lat, current.lng, middle[j].lat, middle[j].lng);
                         if (dist < minDist) {
                             minDist = dist;
                             nearest = j;
@@ -282,6 +291,34 @@
             return route;
         }
 
+        // Simple geographic split: sort by longitude and divide in half
+        function splitIntoTwoGroups(carLocations) {
+            if (carLocations.length < 2) return [carLocations, []];
+            
+            // Sort by longitude (west → east)
+            const sorted = [...carLocations].sort((a, b) => a.lng - b.lng);
+            const mid = Math.ceil(sorted.length / 2);
+            return [sorted.slice(0, mid), sorted.slice(mid)];
+        }
+
+        // Pick the car closest to the average position as the 2nd pool
+        function chooseSecondPool(carLocations) {
+            if (carLocations.length === 0) return null;
+            const avgLat = carLocations.reduce((s, c) => s + c.lat, 0) / carLocations.length;
+            const avgLng = carLocations.reduce((s, c) => s + c.lng, 0) / carLocations.length;
+            
+            let best = carLocations[0];
+            let bestDist = Infinity;
+            carLocations.forEach(c => {
+                const d = calculateDistance(avgLat, avgLng, c.lat, c.lng);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = c;
+                }
+            });
+            return best;
+        }
+
         function wazeUrl(lat, lng) {
             return `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
         }
@@ -296,7 +333,7 @@
             return url;
         }
 
-        async function calculateRoute() {
+        async function calculateRoute(doSplit) {
             const destSelect = document.getElementById('destinationDropoff');
             const destValue = destSelect.value;
             
@@ -310,8 +347,15 @@
                 return;
             }
 
+            if (doSplit && cars.length <= 3) {
+                alert('Need more than 3 cars to split the route');
+                return;
+            }
+
             const calcBtn = document.getElementById('calcBtn');
+            const splitBtn = document.getElementById('splitBtn');
             calcBtn.disabled = true;
+            splitBtn.disabled = true;
             calcBtn.textContent = 'Working...';
             hideError();
 
@@ -322,48 +366,43 @@
             document.body.appendChild(statusDiv);
 
             try {
-                // 1. Geocode Key Collection (start)
                 statusDiv.textContent = 'Geocoding key collection...';
                 const startCoords = await geocodePostcode('OL2 7BB');
                 if (!startCoords) throw new Error('Could not find key collection postcode: OL2 7BB');
 
-                // 2. Geocode Destination (end)
                 statusDiv.textContent = 'Geocoding drop-off location...';
                 const destPostcode = destValue.includes('EN3 7SN') ? 'EN3 7SN' : 'EN3 7PX';
                 const endCoords = await geocodePostcode(destPostcode);
                 if (!endCoords) throw new Error('Could not find drop-off postcode: ' + destPostcode);
 
-                // 3. Build locations array: START → cars → END
-                const locations = [];
-                locations.push({
-                    lat: startCoords.lat,
-                    lng: startCoords.lng,
-                    driver: 'START',
-                    reg: 'KEY COLLECTION',
-                    postcode: startCoords.postcode || 'OL2 7BB',
-                    isStart: true
-                });
+                const startLoc = {
+                    lat: startCoords.lat, lng: startCoords.lng,
+                    driver: 'START', reg: 'KEY COLLECTION',
+                    postcode: startCoords.postcode || 'OL2 7BB', isStart: true
+                };
+                const endLoc = {
+                    lat: endCoords.lat, lng: endCoords.lng,
+                    driver: 'END', reg: destValue,
+                    postcode: endCoords.postcode || destPostcode, isEnd: true
+                };
 
+                // Build car locations
+                const carLocs = [];
                 for (let i = 0; i < cars.length; i++) {
                     const car = cars[i];
                     statusDiv.textContent = `Processing car ${i + 1} of ${cars.length}...`;
 
                     if (car.lat && car.lng) {
-                        locations.push({
-                            lat: car.lat,
-                            lng: car.lng,
-                            driver: car.driver,
-                            reg: car.reg,
-                            postcode: car.postcode
+                        carLocs.push({
+                            lat: car.lat, lng: car.lng,
+                            driver: car.driver, reg: car.reg, postcode: car.postcode
                         });
                     } else {
                         const coords = await geocodePostcode(car.postcode);
                         if (coords) {
-                            locations.push({
-                                lat: coords.lat,
-                                lng: coords.lng,
-                                driver: car.driver,
-                                reg: car.reg,
+                            carLocs.push({
+                                lat: coords.lat, lng: coords.lng,
+                                driver: car.driver, reg: car.reg,
                                 postcode: coords.postcode || car.postcode
                             });
                         } else {
@@ -372,31 +411,44 @@
                     }
                 }
 
-                // Add destination at the end
-                locations.push({
-                    lat: endCoords.lat,
-                    lng: endCoords.lng,
-                    driver: 'END',
-                    reg: destValue,
-                    postcode: endCoords.postcode || destPostcode,
-                    isEnd: true
-                });
-
-                statusDiv.textContent = 'Calculating best order...';
+                statusDiv.textContent = doSplit ? 'Splitting routes & choosing 2nd pool...' : 'Calculating best order...';
                 await new Promise(r => setTimeout(r, 200));
 
-                const route = nearestNeighbourRoute(locations);
-                lastRoute = route;
+                if (!doSplit) {
+                    // Single route
+                    const locations = [startLoc, ...carLocs, endLoc];
+                    const route = nearestNeighbourRoute(locations);
+                    let totalDist = 0;
+                    for (let i = 0; i < route.length - 1; i++) {
+                        totalDist += calculateDistance(route[i].lat, route[i].lng, route[i+1].lat, route[i+1].lng);
+                    }
+                    renderSingleRoute(route, totalDist);
+                } else {
+                    // Split mode
+                    const secondPool = chooseSecondPool(carLocs);
+                    secondPool.isSecondPool = true;
 
-                let totalDist = 0;
-                for (let i = 0; i < route.length - 1; i++) {
-                    totalDist += calculateDistance(
-                        route[i].lat, route[i].lng,
-                        route[i+1].lat, route[i+1].lng
-                    );
+                    const [group1, group2] = splitIntoTwoGroups(carLocs);
+
+                    // Make sure the 2nd pool is in group1 for Route 1 (ends at 2nd pool)
+                    // and also appears as start of Route 2
+                    const g1 = group1.filter(c => c.reg !== secondPool.reg);
+                    const g2 = group2.filter(c => c.reg !== secondPool.reg);
+
+                    // Route 1: Start → group1 cars → 2nd Pool
+                    const route1Raw = [startLoc, ...g1, { ...secondPool, isSecondPool: true }];
+                    const route1 = nearestNeighbourRoute(route1Raw);
+
+                    // Route 2: 2nd Pool → group2 cars → End
+                    const route2Raw = [{ ...secondPool, isSecondPool: true, isStartOfRoute2: true }, ...g2, endLoc];
+                    const route2 = nearestNeighbourRoute(route2Raw);
+
+                    let dist1 = 0, dist2 = 0;
+                    for (let i = 0; i < route1.length - 1; i++) dist1 += calculateDistance(route1[i].lat, route1[i].lng, route1[i+1].lat, route1[i+1].lng);
+                    for (let i = 0; i < route2.length - 1; i++) dist2 += calculateDistance(route2[i].lat, route2[i].lng, route2[i+1].lat, route2[i+1].lng);
+
+                    renderSplitRoutes(route1, route2, dist1, dist2, secondPool);
                 }
-
-                renderMap(route, totalDist);
 
                 document.getElementById('mapSection').style.display = 'block';
                 setTimeout(() => {
@@ -410,91 +462,171 @@
                 const toast = document.getElementById('statusToast');
                 if (toast) toast.remove();
                 calcBtn.disabled = false;
+                splitBtn.disabled = false;
                 calcBtn.textContent = 'Calculate Most Efficient Route';
             }
         }
 
-        function renderMap(route, totalDist) {
+        function clearMapLayers() {
             if (map) {
-                map.remove();
+                markers.forEach(m => map.removeLayer(m));
+                routeLines.forEach(l => map.removeLayer(l));
             }
-            
+            markers = [];
+            routeLines = [];
+        }
+
+        function renderSingleRoute(route, totalDist) {
+            if (map) map.remove();
             map = L.map('map').setView([route[0].lat, route[0].lng], 9);
-            
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
-            
-            markers = [];
-            
+
+            clearMapLayers();
+
             route.forEach((loc, index) => {
                 let label = '';
-                if (loc.isStart) {
-                    label = `<strong>START – Key Collection</strong><br>${loc.postcode}`;
-                } else if (loc.isEnd) {
-                    label = `<strong>END – Drop-off</strong><br>${loc.reg}<br>${loc.postcode}`;
-                } else {
-                    label = `<strong>${index}. Driver ${loc.driver}</strong><br>${loc.reg}<br>${loc.postcode}`;
-                }
+                if (loc.isStart) label = `<strong>START – Key Collection</strong><br>${loc.postcode}`;
+                else if (loc.isEnd) label = `<strong>END – Drop-off</strong><br>${loc.reg}<br>${loc.postcode}`;
+                else label = `<strong>${index}. Driver ${loc.driver}</strong><br>${loc.reg}<br>${loc.postcode}`;
                 
-                const marker = L.marker([loc.lat, loc.lng])
-                    .addTo(map)
-                    .bindPopup(label);
+                const marker = L.marker([loc.lat, loc.lng]).addTo(map).bindPopup(label);
                 markers.push(marker);
             });
-            
+
             const latlngs = route.map(loc => [loc.lat, loc.lng]);
-            if (routeLine) routeLine.remove();
-            routeLine = L.polyline(latlngs, { color: '#007bff', weight: 4 }).addTo(map);
-            
+            const line = L.polyline(latlngs, { color: '#007bff', weight: 4 }).addTo(map);
+            routeLines.push(line);
             map.fitBounds(latlngs, { padding: [40, 40] });
             setTimeout(() => map.invalidateSize(), 200);
-            
-            // Navigation buttons
-            const navContainer = document.getElementById('navButtons');
-            const firstStop = route.find(r => !r.isStart) || route[1]; // first real stop after keys
-            const wazeFirst = firstStop ? wazeUrl(firstStop.lat, firstStop.lng) : '#';
-            const gmapsUrl = googleMapsMultiStopUrl(route);
-            
-            navContainer.innerHTML = `
-                <a class="nav-btn waze-btn" href="${wazeFirst}" target="_blank" rel="noopener">
-                    ▶ Open first stop in Waze
-                </a>
-                <a class="nav-btn gmaps-btn" href="${gmapsUrl}" target="_blank" rel="noopener">
-                    ▶ Open full route in Google Maps
-                </a>
+
+            document.getElementById('routeTitle').textContent = 'Route Order (Single Route)';
+
+            // Nav buttons
+            const firstStop = route.find(r => !r.isStart) || route[1];
+            document.getElementById('navButtons').innerHTML = `
+                <a class="nav-btn waze-btn" href="${wazeUrl(firstStop.lat, firstStop.lng)}" target="_blank" rel="noopener">▶ Open first stop in Waze</a>
+                <a class="nav-btn gmaps-btn" href="${googleMapsMultiStopUrl(route)}" target="_blank" rel="noopener">▶ Open full route in Google Maps</a>
             `;
-            
-            // Route steps with individual Waze links
-            const stepsContainer = document.getElementById('routeSteps');
-            stepsContainer.innerHTML = route.map((loc, index) => {
+
+            // Steps
+            document.getElementById('routeSteps').innerHTML = route.map((loc, index) => {
                 const wazeLink = `<a class="waze-small" href="${wazeUrl(loc.lat, loc.lng)}" target="_blank" rel="noopener">Waze</a>`;
-                
-                if (loc.isStart) {
-                    return `<div class="route-step"><span><strong>${index + 1}. START – Key Collection</strong> — ${loc.postcode}</span> ${wazeLink}</div>`;
-                } else if (loc.isEnd) {
-                    return `<div class="route-step"><span><strong>${index + 1}. END – Drop-off</strong> — ${loc.reg}</span> ${wazeLink}</div>`;
-                } else {
-                    return `<div class="route-step"><span>${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</span> ${wazeLink}</div>`;
-                }
+                if (loc.isStart) return `<div class="route-step"><span><strong>${index + 1}. START – Key Collection</strong> — ${loc.postcode}</span> ${wazeLink}</div>`;
+                if (loc.isEnd) return `<div class="route-step"><span><strong>${index + 1}. END – Drop-off</strong> — ${loc.reg}</span> ${wazeLink}</div>`;
+                return `<div class="route-step"><span>${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</span> ${wazeLink}</div>`;
             }).join('');
-            
-            // Written instructions
-            const instrContainer = document.getElementById('instructionLines');
-            let instructions = '';
+
+            // Instructions
+            let instructions = '<div class="instructions"><h4>Written Instructions</h4>';
             route.forEach((loc, index) => {
-                if (loc.isStart) {
-                    instructions += `<div class="instruction-line"><strong>1.</strong> Collect keys from <strong>${loc.postcode}</strong> (Key Collection).</div>`;
-                } else if (loc.isEnd) {
-                    instructions += `<div class="instruction-line"><strong>${index + 1}.</strong> Drop the car(s) off at <strong>${loc.reg}</strong>.</div>`;
+                if (loc.isStart) instructions += `<div class="instruction-line"><strong>1.</strong> Collect keys from <strong>${loc.postcode}</strong> (Key Collection).</div>`;
+                else if (loc.isEnd) instructions += `<div class="instruction-line"><strong>${index + 1}.</strong> Drop the car(s) off at <strong>${loc.reg}</strong>.</div>`;
+                else instructions += `<div class="instruction-line"><strong>${index + 1}.</strong> Collect <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong> (Driver ${loc.driver}).</div>`;
+            });
+            instructions += '</div>';
+            document.getElementById('writtenInstructions').innerHTML = instructions;
+
+            document.getElementById('totalDistance').innerHTML = `Total distance: <strong>${totalDist.toFixed(1)} miles</strong> (straight-line estimate)`;
+        }
+
+        function renderSplitRoutes(route1, route2, dist1, dist2, secondPool) {
+            if (map) map.remove();
+            map = L.map('map').setView([route1[0].lat, route1[0].lng], 9);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            clearMapLayers();
+
+            // Draw both routes
+            const allPoints = [];
+            [route1, route2].forEach((route, rIdx) => {
+                const color = rIdx === 0 ? '#007bff' : '#e67e22';
+                route.forEach((loc, index) => {
+                    let label = '';
+                    if (loc.isStart) label = `<strong>START – Key Collection</strong><br>${loc.postcode}`;
+                    else if (loc.isEnd) label = `<strong>END – Drop-off</strong><br>${loc.reg}<br>${loc.postcode}`;
+                    else if (loc.isSecondPool) label = `<strong>2ND POOL</strong><br>${loc.reg}<br>${loc.postcode}`;
+                    else label = `<strong>Driver ${loc.driver}</strong><br>${loc.reg}<br>${loc.postcode}`;
+                    
+                    const marker = L.marker([loc.lat, loc.lng]).addTo(map).bindPopup(label);
+                    markers.push(marker);
+                    allPoints.push([loc.lat, loc.lng]);
+                });
+                const latlngs = route.map(loc => [loc.lat, loc.lng]);
+                const line = L.polyline(latlngs, { color, weight: 4, opacity: 0.85 }).addTo(map);
+                routeLines.push(line);
+            });
+
+            map.fitBounds(allPoints, { padding: [40, 40] });
+            setTimeout(() => map.invalidateSize(), 200);
+
+            document.getElementById('routeTitle').textContent = 'Split Routes (2 drivers / pools)';
+
+            // Nav buttons for both routes
+            document.getElementById('navButtons').innerHTML = `
+                <a class="nav-btn waze-btn" href="${wazeUrl(route1[1].lat, route1[1].lng)}" target="_blank" rel="noopener">▶ Route 1 first stop (Waze)</a>
+                <a class="nav-btn gmaps-btn" href="${googleMapsMultiStopUrl(route1)}" target="_blank" rel="noopener">▶ Route 1 in Google Maps</a>
+                <a class="nav-btn waze-btn" href="${wazeUrl(route2[0].lat, route2[0].lng)}" target="_blank" rel="noopener">▶ Route 2 start / 2nd Pool (Waze)</a>
+                <a class="nav-btn gmaps-btn" href="${googleMapsMultiStopUrl(route2)}" target="_blank" rel="noopener">▶ Route 2 in Google Maps</a>
+            `;
+
+            // Combined steps
+            let stepsHtml = `<div class="route-header r1">Route 1 – Pool Driver 1 (ends at 2nd Pool)</div>`;
+            stepsHtml += route1.map((loc, index) => {
+                const wazeLink = `<a class="waze-small" href="${wazeUrl(loc.lat, loc.lng)}" target="_blank" rel="noopener">Waze</a>`;
+                if (loc.isStart) return `<div class="route-step"><span><strong>${index + 1}. START – Key Collection</strong> — ${loc.postcode}</span> ${wazeLink}</div>`;
+                if (loc.isSecondPool) return `<div class="route-step"><span><strong>${index + 1}. 2ND POOL</strong> — ${loc.reg} — ${loc.postcode} <span class="pool-badge">2nd Pool</span></span> ${wazeLink}</div>`;
+                return `<div class="route-step"><span>${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</span> ${wazeLink}</div>`;
+            }).join('');
+
+            stepsHtml += `<div class="route-header r2">Route 2 – Pool Driver 2 (starts at 2nd Pool)</div>`;
+            stepsHtml += route2.map((loc, index) => {
+                const wazeLink = `<a class="waze-small" href="${wazeUrl(loc.lat, loc.lng)}" target="_blank" rel="noopener">Waze</a>`;
+                if (loc.isSecondPool || loc.isStartOfRoute2) return `<div class="route-step"><span><strong>${index + 1}. 2ND POOL (start)</strong> — ${loc.reg} — ${loc.postcode} <span class="pool-badge">2nd Pool</span></span> ${wazeLink}</div>`;
+                if (loc.isEnd) return `<div class="route-step"><span><strong>${index + 1}. END – Drop-off</strong> — ${loc.reg}</span> ${wazeLink}</div>`;
+                return `<div class="route-step"><span>${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</span> ${wazeLink}</div>`;
+            }).join('');
+
+            document.getElementById('routeSteps').innerHTML = stepsHtml;
+
+            // Written instructions for both
+            let instr = `
+                <div class="instructions">
+                    <h4>Route 1 – Pool Driver 1</h4>
+                    <div class="instruction-line"><strong>1.</strong> Collect keys from <strong>${route1[0].postcode}</strong> (Key Collection).</div>
+            `;
+            route1.slice(1).forEach((loc, i) => {
+                if (loc.isSecondPool) {
+                    instr += `<div class="instruction-line"><strong>${i + 2}.</strong> Meet / hand over at the <strong>2nd Pool</strong>: <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong>.</div>`;
                 } else {
-                    instructions += `<div class="instruction-line"><strong>${index + 1}.</strong> Collect <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong> (Driver ${loc.driver}).</div>`;
+                    instr += `<div class="instruction-line"><strong>${i + 2}.</strong> Collect <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong> (Driver ${loc.driver}).</div>`;
                 }
             });
-            instrContainer.innerHTML = instructions;
-            
-            document.getElementById('totalDistance').innerHTML = 
-                `Total distance: <strong>${totalDist.toFixed(1)} miles</strong> (straight-line estimate)`;
+            instr += `</div>
+                <div class="instructions route2">
+                    <h4>Route 2 – Pool Driver 2</h4>
+                    <div class="instruction-line"><strong>1.</strong> Start at the <strong>2nd Pool</strong>: <strong>${secondPool.reg}</strong> at <strong>${secondPool.postcode}</strong>.</div>
+            `;
+            route2.slice(1).forEach((loc, i) => {
+                if (loc.isEnd) {
+                    instr += `<div class="instruction-line"><strong>${i + 2}.</strong> Drop the car(s) off at <strong>${loc.reg}</strong>.</div>`;
+                } else {
+                    instr += `<div class="instruction-line"><strong>${i + 2}.</strong> Collect <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong> (Driver ${loc.driver}).</div>`;
+                }
+            });
+            instr += `</div>`;
+
+            document.getElementById('writtenInstructions').innerHTML = instr;
+
+            document.getElementById('totalDistance').innerHTML = `
+                Route 1: <strong>${dist1.toFixed(1)} miles</strong> &nbsp;|&nbsp;
+                Route 2: <strong>${dist2.toFixed(1)} miles</strong> &nbsp;|&nbsp;
+                Combined: <strong>${(dist1 + dist2).toFixed(1)} miles</strong>
+                <br><span class="note">2nd Pool stop: ${secondPool.reg} (${secondPool.postcode})</span>
+            `;
         }
 
         document.getElementById('postcodeInput').addEventListener('keypress', function(e) {
@@ -508,6 +640,7 @@
         });
 
         renderCarList();
+        updateSplitButton();
     </script>
 </body>
 </html>
