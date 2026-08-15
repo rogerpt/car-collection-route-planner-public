@@ -21,7 +21,7 @@
         .delete-btn { background: #dc3545; padding: 5px 10px; flex-shrink: 0; }
         .delete-btn:hover { background: #c82333; }
         #map { height: 500px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .route-step { padding: 10px 0; border-bottom: 1px solid #eee; }
+        .route-step { padding: 10px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
         .route-step:last-child { border-bottom: none; }
         .total-distance { font-weight: bold; margin-top: 10px; padding-top: 10px; border-top: 2px solid #007bff; }
         .error-box { background: #f8d7da; color: #721c24; padding: 12px; border-radius: 6px; margin-top: 10px; display: none; }
@@ -31,6 +31,15 @@
         label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
         .start-end-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         @media (max-width: 600px) { .start-end-grid { grid-template-columns: 1fr; } }
+        .nav-buttons { display: flex; gap: 12px; flex-wrap: wrap; margin: 15px 0; }
+        .nav-btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; }
+        .waze-btn { background: #33ccff; color: #00334d; }
+        .waze-btn:hover { background: #1ab8f0; }
+        .gmaps-btn { background: #34a853; color: white; }
+        .gmaps-btn:hover { background: #2d8f47; }
+        .waze-small { background: #33ccff; color: #00334d; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .waze-small:hover { background: #1ab8f0; }
+        .note { font-size: 13px; color: #666; margin-top: 8px; }
     </style>
 </head>
 <body>
@@ -81,6 +90,11 @@
             
             <div class="route-info">
                 <h3>Route Order</h3>
+                
+                <!-- Navigation buttons -->
+                <div class="nav-buttons" id="navButtons"></div>
+                <p class="note">Waze only supports one destination at a time. Use the buttons above to open the first stop, then use the individual Waze links next to each stop.</p>
+                
                 <div id="routeSteps"></div>
                 <div id="totalDistance" class="total-distance"></div>
 
@@ -98,6 +112,7 @@
         let map = null;
         let markers = [];
         let routeLine = null;
+        let lastRoute = [];
 
         // Pre-geocoded sample data
         const SAMPLE = [
@@ -267,6 +282,20 @@
             return route;
         }
 
+        function wazeUrl(lat, lng) {
+            return `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+        }
+
+        function googleMapsMultiStopUrl(route) {
+            if (route.length < 2) return '#';
+            const origin = `${route[0].lat},${route[0].lng}`;
+            const destination = `${route[route.length - 1].lat},${route[route.length - 1].lng}`;
+            const waypoints = route.slice(1, -1).map(p => `${p.lat},${p.lng}`).join('|');
+            let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
+            if (waypoints) url += `&waypoints=${waypoints}`;
+            return url;
+        }
+
         async function calculateRoute() {
             const destSelect = document.getElementById('destinationDropoff');
             const destValue = destSelect.value;
@@ -357,6 +386,7 @@
                 await new Promise(r => setTimeout(r, 200));
 
                 const route = nearestNeighbourRoute(locations);
+                lastRoute = route;
 
                 let totalDist = 0;
                 for (let i = 0; i < route.length - 1; i++) {
@@ -420,15 +450,32 @@
             map.fitBounds(latlngs, { padding: [40, 40] });
             setTimeout(() => map.invalidateSize(), 200);
             
-            // Route steps
+            // Navigation buttons
+            const navContainer = document.getElementById('navButtons');
+            const firstStop = route.find(r => !r.isStart) || route[1]; // first real stop after keys
+            const wazeFirst = firstStop ? wazeUrl(firstStop.lat, firstStop.lng) : '#';
+            const gmapsUrl = googleMapsMultiStopUrl(route);
+            
+            navContainer.innerHTML = `
+                <a class="nav-btn waze-btn" href="${wazeFirst}" target="_blank" rel="noopener">
+                    ▶ Open first stop in Waze
+                </a>
+                <a class="nav-btn gmaps-btn" href="${gmapsUrl}" target="_blank" rel="noopener">
+                    ▶ Open full route in Google Maps
+                </a>
+            `;
+            
+            // Route steps with individual Waze links
             const stepsContainer = document.getElementById('routeSteps');
             stepsContainer.innerHTML = route.map((loc, index) => {
+                const wazeLink = `<a class="waze-small" href="${wazeUrl(loc.lat, loc.lng)}" target="_blank" rel="noopener">Waze</a>`;
+                
                 if (loc.isStart) {
-                    return `<div class="route-step"><strong>${index + 1}. START – Key Collection</strong> — ${loc.postcode}</div>`;
+                    return `<div class="route-step"><span><strong>${index + 1}. START – Key Collection</strong> — ${loc.postcode}</span> ${wazeLink}</div>`;
                 } else if (loc.isEnd) {
-                    return `<div class="route-step"><strong>${index + 1}. END – Drop-off</strong> — ${loc.reg}</div>`;
+                    return `<div class="route-step"><span><strong>${index + 1}. END – Drop-off</strong> — ${loc.reg}</span> ${wazeLink}</div>`;
                 } else {
-                    return `<div class="route-step">${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</div>`;
+                    return `<div class="route-step"><span>${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</span> ${wazeLink}</div>`;
                 }
             }).join('');
             
