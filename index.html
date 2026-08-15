@@ -9,9 +9,10 @@
         body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
         .container { max-width: 1200px; margin: 0 auto; }
         h1 { color: #333; }
-        .input-section, .car-list, .route-info { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .input-section, .car-list, .route-info, .start-end-section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-        input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 120px; }
+        input, select { padding: 10px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 120px; font-size: 15px; }
+        input[readonly] { background-color: #f0f0f0; color: #333; }
         button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover { background: #0056b3; }
         button:disabled { background: #aaa; cursor: not-allowed; }
@@ -27,12 +28,34 @@
         .instructions { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-top: 15px; line-height: 1.5; }
         .instructions h4 { margin-top: 0; margin-bottom: 10px; }
         .instruction-line { margin: 8px 0; padding-left: 10px; border-left: 3px solid #007bff; }
+        label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
+        .start-end-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 600px) { .start-end-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚗 Car Collection Route Planner</h1>
         
+        <!-- Key Collection Start + Destination Drop-off -->
+        <div class="start-end-section">
+            <h2>Start & Destination</h2>
+            <div class="start-end-grid">
+                <div>
+                    <label for="keyCollection">Key Collection Postcode (start)</label>
+                    <input type="text" id="keyCollection" value="OL2 7BB" readonly>
+                </div>
+                <div>
+                    <label for="destinationDropoff">Destination Car Drop-off</label>
+                    <select id="destinationDropoff" required>
+                        <option value="">-- Select drop-off location --</option>
+                        <option value="Mega EN3 7SN">Mega EN3 7SN</option>
+                        <option value="Lockfield EN3 7PX">Lockfield EN3 7PX</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
         <div class="input-section">
             <h2>Add Car</h2>
             <div class="form-row">
@@ -76,7 +99,7 @@
         let markers = [];
         let routeLine = null;
 
-        // Pre-geocoded sample data (Driver A starts with BA68FSO as requested)
+        // Pre-geocoded sample data
         const SAMPLE = [
             { driver: 'A', reg: 'BA68FSO', postcode: 'SK4 4BJ', lat: 53.423353, lng: -2.191776 },
             { driver: 'A', reg: 'MM69XYP', postcode: 'L31 0BH', lat: 53.519906, lng: -2.939849 },
@@ -96,7 +119,6 @@
             }
             
             if (!driver) {
-                // Auto-assign next letter if blank
                 const used = cars.map(c => c.driver);
                 const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
                 driver = letters.split('').find(l => !used.includes(l)) || 'X';
@@ -203,24 +225,29 @@
         }
 
         function nearestNeighbourRoute(locations) {
+            // locations[0] is start, last is end — optimise the middle points only
             const n = locations.length;
-            if (n === 0) return [];
+            if (n <= 2) return locations;
             
-            const visited = new Array(n).fill(false);
-            const route = [];
-            let current = 0;
-            visited[0] = true;
-            route.push(locations[0]);
+            const start = locations[0];
+            const end = locations[n - 1];
+            const middle = locations.slice(1, n - 1);
             
-            for (let i = 1; i < n; i++) {
+            if (middle.length === 0) return locations;
+            
+            const visited = new Array(middle.length).fill(false);
+            const route = [start];
+            let current = start;
+            
+            for (let i = 0; i < middle.length; i++) {
                 let nearest = -1;
                 let minDist = Infinity;
                 
-                for (let j = 0; j < n; j++) {
+                for (let j = 0; j < middle.length; j++) {
                     if (!visited[j]) {
                         const dist = calculateDistance(
-                            locations[current].lat, locations[current].lng,
-                            locations[j].lat, locations[j].lng
+                            current.lat, current.lng,
+                            middle[j].lat, middle[j].lng
                         );
                         if (dist < minDist) {
                             minDist = dist;
@@ -231,14 +258,24 @@
                 
                 if (nearest !== -1) {
                     visited[nearest] = true;
-                    route.push(locations[nearest]);
-                    current = nearest;
+                    route.push(middle[nearest]);
+                    current = middle[nearest];
                 }
             }
+            
+            route.push(end);
             return route;
         }
 
         async function calculateRoute() {
+            const destSelect = document.getElementById('destinationDropoff');
+            const destValue = destSelect.value;
+            
+            if (!destValue) {
+                alert('Please select a Destination Car Drop-off location');
+                return;
+            }
+            
             if (cars.length === 0) {
                 alert('Add some cars first');
                 return;
@@ -256,11 +293,31 @@
             document.body.appendChild(statusDiv);
 
             try {
+                // 1. Geocode Key Collection (start)
+                statusDiv.textContent = 'Geocoding key collection...';
+                const startCoords = await geocodePostcode('OL2 7BB');
+                if (!startCoords) throw new Error('Could not find key collection postcode: OL2 7BB');
+
+                // 2. Geocode Destination (end)
+                statusDiv.textContent = 'Geocoding drop-off location...';
+                const destPostcode = destValue.includes('EN3 7SN') ? 'EN3 7SN' : 'EN3 7PX';
+                const endCoords = await geocodePostcode(destPostcode);
+                if (!endCoords) throw new Error('Could not find drop-off postcode: ' + destPostcode);
+
+                // 3. Build locations array: START → cars → END
                 const locations = [];
+                locations.push({
+                    lat: startCoords.lat,
+                    lng: startCoords.lng,
+                    driver: 'START',
+                    reg: 'KEY COLLECTION',
+                    postcode: startCoords.postcode || 'OL2 7BB',
+                    isStart: true
+                });
 
                 for (let i = 0; i < cars.length; i++) {
                     const car = cars[i];
-                    statusDiv.textContent = `Processing ${i + 1} of ${cars.length}...`;
+                    statusDiv.textContent = `Processing car ${i + 1} of ${cars.length}...`;
 
                     if (car.lat && car.lng) {
                         locations.push({
@@ -285,6 +342,16 @@
                         }
                     }
                 }
+
+                // Add destination at the end
+                locations.push({
+                    lat: endCoords.lat,
+                    lng: endCoords.lng,
+                    driver: 'END',
+                    reg: destValue,
+                    postcode: endCoords.postcode || destPostcode,
+                    isEnd: true
+                });
 
                 statusDiv.textContent = 'Calculating best order...';
                 await new Promise(r => setTimeout(r, 200));
@@ -331,9 +398,18 @@
             markers = [];
             
             route.forEach((loc, index) => {
+                let label = '';
+                if (loc.isStart) {
+                    label = `<strong>START – Key Collection</strong><br>${loc.postcode}`;
+                } else if (loc.isEnd) {
+                    label = `<strong>END – Drop-off</strong><br>${loc.reg}<br>${loc.postcode}`;
+                } else {
+                    label = `<strong>${index}. Driver ${loc.driver}</strong><br>${loc.reg}<br>${loc.postcode}`;
+                }
+                
                 const marker = L.marker([loc.lat, loc.lng])
                     .addTo(map)
-                    .bindPopup(`<strong>${index + 1}. Driver ${loc.driver}</strong><br>${loc.reg}<br>${loc.postcode}`);
+                    .bindPopup(label);
                 markers.push(marker);
             });
             
@@ -346,21 +422,28 @@
             
             // Route steps
             const stepsContainer = document.getElementById('routeSteps');
-            stepsContainer.innerHTML = route.map((loc, index) => 
-                `<div class="route-step">${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</div>`
-            ).join('');
+            stepsContainer.innerHTML = route.map((loc, index) => {
+                if (loc.isStart) {
+                    return `<div class="route-step"><strong>${index + 1}. START – Key Collection</strong> — ${loc.postcode}</div>`;
+                } else if (loc.isEnd) {
+                    return `<div class="route-step"><strong>${index + 1}. END – Drop-off</strong> — ${loc.reg}</div>`;
+                } else {
+                    return `<div class="route-step">${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</div>`;
+                }
+            }).join('');
             
             // Written instructions
             const instrContainer = document.getElementById('instructionLines');
             let instructions = '';
             route.forEach((loc, index) => {
-                if (index === 0) {
-                    instructions += `<div class="instruction-line"><strong>1.</strong> Driver ${loc.driver} collects <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong> first.</div>`;
+                if (loc.isStart) {
+                    instructions += `<div class="instruction-line"><strong>1.</strong> Collect keys from <strong>${loc.postcode}</strong> (Key Collection).</div>`;
+                } else if (loc.isEnd) {
+                    instructions += `<div class="instruction-line"><strong>${index + 1}.</strong> Drop the car(s) off at <strong>${loc.reg}</strong>.</div>`;
                 } else {
-                    instructions += `<div class="instruction-line"><strong>${index + 1}.</strong> Driver ${loc.driver} then collects <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong>.</div>`;
+                    instructions += `<div class="instruction-line"><strong>${index + 1}.</strong> Collect <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong> (Driver ${loc.driver}).</div>`;
                 }
             });
-            instructions += `<div class="instruction-line" style="margin-top:12px;"><em>Then return / continue as needed.</em></div>`;
             instrContainer.innerHTML = instructions;
             
             document.getElementById('totalDistance').innerHTML = 
