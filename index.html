@@ -9,23 +9,24 @@
         body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
         .container { max-width: 1200px; margin: 0 auto; }
         h1 { color: #333; }
-        .input-section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .input-section, .car-list, .route-info { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-        input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 150px; }
+        input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 120px; }
         button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover { background: #0056b3; }
         button:disabled { background: #aaa; cursor: not-allowed; }
-        .car-list { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .car-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
+        .car-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; gap: 10px; }
         .car-item:last-child { border-bottom: none; }
-        .delete-btn { background: #dc3545; padding: 5px 10px; }
+        .delete-btn { background: #dc3545; padding: 5px 10px; flex-shrink: 0; }
         .delete-btn:hover { background: #c82333; }
         #map { height: 500px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .route-info { background: white; padding: 20px; border-radius: 8px; margin-top: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .route-step { padding: 8px 0; border-bottom: 1px solid #eee; }
+        .route-step { padding: 10px 0; border-bottom: 1px solid #eee; }
         .route-step:last-child { border-bottom: none; }
         .total-distance { font-weight: bold; margin-top: 10px; padding-top: 10px; border-top: 2px solid #007bff; }
         .error-box { background: #f8d7da; color: #721c24; padding: 12px; border-radius: 6px; margin-top: 10px; display: none; }
+        .instructions { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-top: 15px; line-height: 1.5; }
+        .instructions h4 { margin-top: 0; margin-bottom: 10px; }
+        .instruction-line { margin: 8px 0; padding-left: 10px; border-left: 3px solid #007bff; }
     </style>
 </head>
 <body>
@@ -35,11 +36,12 @@
         <div class="input-section">
             <h2>Add Car</h2>
             <div class="form-row">
+                <input type="text" id="driverInput" placeholder="Driver name (e.g. A or Dave)" />
                 <input type="text" id="regInput" placeholder="Registration (e.g. BA68FSO)" />
                 <input type="text" id="postcodeInput" placeholder="Postcode (e.g. SK4 4BJ)" />
-                <button onclick="addCar()">Add Car</button>
             </div>
-            <button onclick="useSampleData()" style="background: #28a745;">Load Sample Data</button>
+            <button onclick="addCar()">Add Car</button>
+            <button onclick="useSampleData()" style="background: #28a745; margin-left: 8px;">Load Sample Data</button>
         </div>
 
         <div class="car-list">
@@ -55,9 +57,14 @@
             <div id="map"></div>
             
             <div class="route-info">
-                <h3>Route Order (starts with BA68FSO first)</h3>
+                <h3>Route Order</h3>
                 <div id="routeSteps"></div>
                 <div id="totalDistance" class="total-distance"></div>
+
+                <div class="instructions" id="writtenInstructions">
+                    <h4>Written Instructions</h4>
+                    <div id="instructionLines"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -69,26 +76,35 @@
         let markers = [];
         let routeLine = null;
 
-        // Pre-geocoded sample data so it works even when the API is blocked
+        // Pre-geocoded sample data (Driver A starts with BA68FSO as requested)
         const SAMPLE = [
-            { reg: 'BA68FSO', postcode: 'SK4 4BJ', lat: 53.423353, lng: -2.191776 },
-            { reg: 'MM69XYP', postcode: 'L31 0BH', lat: 53.519906, lng: -2.939849 },
-            { reg: 'MF69VDZ', postcode: 'WA8 5BP', lat: 53.391781, lng: -2.733209 },
-            { reg: 'LJ700XK', postcode: 'WA16 0AZ', lat: 53.301934, lng: -2.387816 },
-            { reg: 'YL65KBX', postcode: 'CW12 4ZG', lat: 53.172219, lng: -2.253232 }
+            { driver: 'A', reg: 'BA68FSO', postcode: 'SK4 4BJ', lat: 53.423353, lng: -2.191776 },
+            { driver: 'A', reg: 'MM69XYP', postcode: 'L31 0BH', lat: 53.519906, lng: -2.939849 },
+            { driver: 'A', reg: 'MF69VDZ', postcode: 'WA8 5BP', lat: 53.391781, lng: -2.733209 },
+            { driver: 'A', reg: 'LJ700XK', postcode: 'WA16 0AZ', lat: 53.301934, lng: -2.387816 },
+            { driver: 'A', reg: 'YL65KBX', postcode: 'CW12 4ZG', lat: 53.172219, lng: -2.253232 }
         ];
 
         function addCar() {
+            let driver = document.getElementById('driverInput').value.trim();
             const reg = document.getElementById('regInput').value.trim().toUpperCase();
             let postcode = document.getElementById('postcodeInput').value.trim().toUpperCase();
             
             if (!reg || !postcode) {
-                alert('Please enter both registration and postcode');
+                alert('Please enter registration and postcode');
                 return;
             }
             
+            if (!driver) {
+                // Auto-assign next letter if blank
+                const used = cars.map(c => c.driver);
+                const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+                driver = letters.split('').find(l => !used.includes(l)) || 'X';
+            }
+
             postcode = normalisePostcode(postcode);
-            cars.push({ reg, postcode });
+            cars.push({ driver, reg, postcode });
+            document.getElementById('driverInput').value = '';
             document.getElementById('regInput').value = '';
             document.getElementById('postcodeInput').value = '';
             renderCarList();
@@ -120,7 +136,7 @@
             
             container.innerHTML = cars.map((car, index) => `
                 <div class="car-item">
-                    <span><strong>${car.reg}</strong> — ${car.postcode}</span>
+                    <span><strong>Driver ${car.driver}</strong> — ${car.reg} — ${car.postcode}</span>
                     <button class="delete-btn" onclick="deleteCar(${index})">Remove</button>
                 </div>
             `).join('');
@@ -176,8 +192,7 @@
         }
 
         function calculateDistance(lat1, lon1, lat2, lon2) {
-            // Returns distance in miles
-            const R = 3958.8; // Earth radius in miles
+            const R = 3958.8; // miles
             const dLat = (lat2 - lat1) * Math.PI / 180;
             const dLon = (lon2 - lon1) * Math.PI / 180;
             const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
@@ -247,21 +262,21 @@
                     const car = cars[i];
                     statusDiv.textContent = `Processing ${i + 1} of ${cars.length}...`;
 
-                    // Use pre-loaded coordinates if available (sample data)
                     if (car.lat && car.lng) {
                         locations.push({
                             lat: car.lat,
                             lng: car.lng,
+                            driver: car.driver,
                             reg: car.reg,
                             postcode: car.postcode
                         });
                     } else {
-                        // Geocode new cars
                         const coords = await geocodePostcode(car.postcode);
                         if (coords) {
                             locations.push({
                                 lat: coords.lat,
                                 lng: coords.lng,
+                                driver: car.driver,
                                 reg: car.reg,
                                 postcode: coords.postcode || car.postcode
                             });
@@ -318,7 +333,7 @@
             route.forEach((loc, index) => {
                 const marker = L.marker([loc.lat, loc.lng])
                     .addTo(map)
-                    .bindPopup(`<strong>${index + 1}. ${loc.reg}</strong><br>${loc.postcode}`);
+                    .bindPopup(`<strong>${index + 1}. Driver ${loc.driver}</strong><br>${loc.reg}<br>${loc.postcode}`);
                 markers.push(marker);
             });
             
@@ -327,14 +342,26 @@
             routeLine = L.polyline(latlngs, { color: '#007bff', weight: 4 }).addTo(map);
             
             map.fitBounds(latlngs, { padding: [40, 40] });
-            
-            // Force map to recalculate size (important on mobile)
             setTimeout(() => map.invalidateSize(), 200);
             
+            // Route steps
             const stepsContainer = document.getElementById('routeSteps');
             stepsContainer.innerHTML = route.map((loc, index) => 
-                `<div class="route-step">${index + 1}. <strong>${loc.reg}</strong> — ${loc.postcode}</div>`
+                `<div class="route-step">${index + 1}. <strong>Driver ${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</div>`
             ).join('');
+            
+            // Written instructions
+            const instrContainer = document.getElementById('instructionLines');
+            let instructions = '';
+            route.forEach((loc, index) => {
+                if (index === 0) {
+                    instructions += `<div class="instruction-line"><strong>1.</strong> Driver ${loc.driver} collects <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong> first.</div>`;
+                } else {
+                    instructions += `<div class="instruction-line"><strong>${index + 1}.</strong> Driver ${loc.driver} then collects <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong>.</div>`;
+                }
+            });
+            instructions += `<div class="instruction-line" style="margin-top:12px;"><em>Then return / continue as needed.</em></div>`;
+            instrContainer.innerHTML = instructions;
             
             document.getElementById('totalDistance').innerHTML = 
                 `Total distance: <strong>${totalDist.toFixed(1)} miles</strong> (straight-line estimate)`;
@@ -345,6 +372,9 @@
         });
         document.getElementById('regInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') document.getElementById('postcodeInput').focus();
+        });
+        document.getElementById('driverInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') document.getElementById('regInput').focus();
         });
 
         renderCarList();
