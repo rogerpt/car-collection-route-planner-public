@@ -176,7 +176,8 @@
         }
 
         function calculateDistance(lat1, lon1, lat2, lon2) {
-            const R = 6371;
+            // Returns distance in miles
+            const R = 3958.8; // Earth radius in miles
             const dLat = (lat2 - lat1) * Math.PI / 180;
             const dLon = (lon2 - lon1) * Math.PI / 180;
             const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
@@ -336,7 +337,7 @@
             ).join('');
             
             document.getElementById('totalDistance').innerHTML = 
-                `Total distance: <strong>${totalDist.toFixed(1)} km</strong> (straight-line estimate)`;
+                `Total distance: <strong>${totalDist.toFixed(1)} miles</strong> (straight-line estimate)`;
         }
 
         document.getElementById('postcodeInput').addEventListener('keypress', function(e) {
