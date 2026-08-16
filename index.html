@@ -89,7 +89,7 @@
             <div id="errorBox" class="error-box"></div>
             <button id="calcBtn" onclick="calculateRoute(false)" style="margin-top: 15px; background: #28a745; width: 100%;">Calculate Most Efficient Route</button>
             <button id="splitBtn" onclick="calculateRoute(true)" class="split-btn" style="display: none;">Split into 2 Routes + 2nd Pool</button>
-            <p id="splitNote" class="note" style="display: none;">More than 3 cars detected. You can split the work into two routes and use one stop as a 2nd pool / handover point.</p>
+            <p id="splitNote" class="note" style="display: none;">More than 3 cars detected. You can split the work into two routes. The 2nd pool is the car nearest the key collection.</p>
             <button onclick="clearAll()" style="margin-top: 10px; background: #6c757d; width: 100%;">Clear All</button>
         </div>
 
@@ -305,22 +305,29 @@
             return route;
         }
 
-        function splitIntoTwoGroups(carLocations) {
+        // Split remaining cars: closer half to key collection go with Route 1, further with Route 2
+        function splitIntoTwoGroups(carLocations, startLat, startLng) {
             if (carLocations.length < 2) return [carLocations, []];
-            const sorted = [...carLocations].sort((a, b) => a.lng - b.lng);
+            
+            // Sort by distance from key collection (nearest first)
+            const sorted = [...carLocations].sort((a, b) => {
+                const da = calculateDistance(startLat, startLng, a.lat, a.lng);
+                const db = calculateDistance(startLat, startLng, b.lat, b.lng);
+                return da - db;
+            });
+            
             const mid = Math.ceil(sorted.length / 2);
             return [sorted.slice(0, mid), sorted.slice(mid)];
         }
 
-        function chooseSecondPool(carLocations) {
+        // 2nd Pool = the car nearest the key collection
+        function chooseSecondPool(carLocations, startLat, startLng) {
             if (carLocations.length === 0) return null;
-            const avgLat = carLocations.reduce((s, c) => s + c.lat, 0) / carLocations.length;
-            const avgLng = carLocations.reduce((s, c) => s + c.lng, 0) / carLocations.length;
             
             let best = carLocations[0];
             let bestDist = Infinity;
             carLocations.forEach(c => {
-                const d = calculateDistance(avgLat, avgLng, c.lat, c.lng);
+                const d = calculateDistance(startLat, startLng, c.lat, c.lng);
                 if (d < bestDist) {
                     bestDist = d;
                     best = c;
@@ -420,7 +427,7 @@
                     }
                 }
 
-                statusDiv.textContent = doSplit ? 'Splitting routes & choosing 2nd pool...' : 'Calculating best order...';
+                statusDiv.textContent = doSplit ? 'Splitting routes at nearest car to keys...' : 'Calculating best order...';
                 await new Promise(r => setTimeout(r, 200));
 
                 if (!doSplit) {
@@ -432,18 +439,22 @@
                     }
                     renderSingleRoute(route, totalDist);
                 } else {
-                    const secondPool = chooseSecondPool(carLocs);
+                    // 2nd Pool = car nearest the key collection
+                    const secondPool = chooseSecondPool(carLocs, startCoords.lat, startCoords.lng);
                     secondPool.isSecondPool = true;
 
-                    const [group1, group2] = splitIntoTwoGroups(carLocs);
+                    // Remaining cars (excluding the 2nd pool car)
+                    const remaining = carLocs.filter(c => c.reg !== secondPool.reg);
 
-                    const g1 = group1.filter(c => c.reg !== secondPool.reg);
-                    const g2 = group2.filter(c => c.reg !== secondPool.reg);
+                    // Split remaining: nearer half to keys → Route 1, further → Route 2
+                    const [group1, group2] = splitIntoTwoGroups(remaining, startCoords.lat, startCoords.lng);
 
-                    const route1Raw = [startLoc, ...g1, { ...secondPool, isSecondPool: true }];
+                    // Route 1: Key Collection → nearer cars → ends at 2nd Pool (nearest car)
+                    const route1Raw = [startLoc, ...group1, { ...secondPool, isSecondPool: true }];
                     const route1 = nearestNeighbourRoute(route1Raw);
 
-                    const route2Raw = [{ ...secondPool, isSecondPool: true, isStartOfRoute2: true }, ...g2, endLoc];
+                    // Route 2: 2nd Pool → further cars → Drop-off
+                    const route2Raw = [{ ...secondPool, isSecondPool: true, isStartOfRoute2: true }, ...group2, endLoc];
                     const route2 = nearestNeighbourRoute(route2Raw);
 
                     let dist1 = 0, dist2 = 0;
@@ -596,7 +607,7 @@
             `;
             route1.slice(1).forEach((loc, i) => {
                 if (loc.isSecondPool) {
-                    instr += `<div class="instruction-line"><strong>${i + 2}.</strong> Meet / hand over at the <strong>2nd Pool</strong>: <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong>.</div>`;
+                    instr += `<div class="instruction-line"><strong>${i + 2}.</strong> Meet / hand over at the <strong>2nd Pool</strong> (nearest car to keys): <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong>.</div>`;
                 } else {
                     instr += `<div class="instruction-line"><strong>${i + 2}.</strong> <strong>${loc.driver}</strong> collects <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong>.</div>`;
                 }
@@ -621,7 +632,7 @@
                 Route 1: <strong>${dist1.toFixed(1)} miles</strong> &nbsp;|&nbsp;
                 Route 2: <strong>${dist2.toFixed(1)} miles</strong> &nbsp;|&nbsp;
                 Combined: <strong>${(dist1 + dist2).toFixed(1)} miles</strong>
-                <br><span class="note">2nd Pool stop: ${secondPool.reg} (${secondPool.postcode})</span>
+                <br><span class="note">2nd Pool (nearest car to keys): ${secondPool.reg} (${secondPool.postcode})</span>
             `;
         }
 
