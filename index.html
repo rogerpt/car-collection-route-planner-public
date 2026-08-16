@@ -6,29 +6,66 @@
     <title>Car Collection Route Planner</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        :root {
+            --bg: #f5f5f5;
+            --card: #ffffff;
+            --text: #333333;
+            --text-muted: #666666;
+            --border: #dddddd;
+            --border-light: #eeeeee;
+            --input-bg: #ffffff;
+            --input-readonly: #f0f0f0;
+            --instr-bg: #e8f4fd;
+            --instr2-bg: #fef3e8;
+            --error-bg: #f8d7da;
+            --error-text: #721c24;
+            --shadow: rgba(0,0,0,0.1);
+        }
+        body.dark {
+            --bg: #1a1a1a;
+            --card: #2d2d2d;
+            --text: #e8e8e8;
+            --text-muted: #aaaaaa;
+            --border: #444444;
+            --border-light: #3a3a3a;
+            --input-bg: #3a3a3a;
+            --input-readonly: #333333;
+            --instr-bg: #1e3a4c;
+            --instr2-bg: #3d2e1a;
+            --error-bg: #4a2020;
+            --error-text: #ffb3b3;
+            --shadow: rgba(0,0,0,0.4);
+        }
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: var(--bg); color: var(--text); transition: background 0.2s, color 0.2s; }
         .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: #333; }
-        .input-section, .car-list, .route-info, .start-end-section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
+        h1 { color: var(--text); margin: 0; }
+        h2, h3, h4 { color: var(--text); }
+        .theme-btn { padding: 8px 14px; background: #555; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+        .theme-btn:hover { background: #666; }
+        body.dark .theme-btn { background: #888; color: #111; }
+        body.dark .theme-btn:hover { background: #aaa; }
+        .input-section, .car-list, .route-info, .start-end-section { background: var(--card); padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px var(--shadow); }
         .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-        input, select { padding: 10px; border: 1px solid #ddd; border-radius: 4px; flex: 1; min-width: 120px; font-size: 15px; }
-        input[readonly] { background-color: #f0f0f0; color: #333; }
+        input, select { padding: 10px; border: 1px solid var(--border); border-radius: 4px; flex: 1; min-width: 120px; font-size: 15px; background: var(--input-bg); color: var(--text); }
+        input[readonly] { background-color: var(--input-readonly); color: var(--text); }
+        input::placeholder { color: var(--text-muted); }
         button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover { background: #0056b3; }
         button:disabled { background: #aaa; cursor: not-allowed; }
-        .car-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; gap: 10px; }
+        .car-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid var(--border-light); gap: 10px; }
         .car-item:last-child { border-bottom: none; }
         .delete-btn { background: #dc3545; padding: 5px 10px; flex-shrink: 0; }
         .delete-btn:hover { background: #c82333; }
-        #map { height: 500px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .route-step { padding: 10px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+        #map { height: 500px; border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); }
+        .route-step { padding: 10px 0; border-bottom: 1px solid var(--border-light); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
         .route-step:last-child { border-bottom: none; }
         .total-distance { font-weight: bold; margin-top: 10px; padding-top: 10px; border-top: 2px solid #007bff; }
-        .error-box { background: #f8d7da; color: #721c24; padding: 12px; border-radius: 6px; margin-top: 10px; display: none; }
-        .instructions { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-top: 15px; line-height: 1.5; }
+        .error-box { background: var(--error-bg); color: var(--error-text); padding: 12px; border-radius: 6px; margin-top: 10px; display: none; }
+        .instructions { background: var(--instr-bg); padding: 15px; border-radius: 8px; margin-top: 15px; line-height: 1.5; }
         .instructions h4 { margin-top: 0; margin-bottom: 10px; }
         .instruction-line { margin: 8px 0; padding-left: 10px; border-left: 3px solid #007bff; }
-        .instructions.route2 { background: #fef3e8; }
+        .instructions.route2 { background: var(--instr2-bg); }
         .instructions.route2 .instruction-line { border-left-color: #e67e22; }
         label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
         .start-end-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -41,18 +78,22 @@
         .gmaps-btn:hover { background: #2d8f47; }
         .waze-small { background: #33ccff; color: #00334d; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; }
         .waze-small:hover { background: #1ab8f0; }
-        .note { font-size: 13px; color: #666; margin-top: 8px; }
+        .note { font-size: 13px; color: var(--text-muted); margin-top: 8px; }
         .split-btn { background: #9b59b6; width: 100%; margin-top: 10px; }
         .split-btn:hover { background: #8e44ad; }
         .pool-badge { background: #e67e22; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 6px; }
-        .route-header { font-size: 16px; font-weight: 700; margin: 18px 0 8px; padding-bottom: 6px; border-bottom: 2px solid #ddd; }
-        .route-header.r1 { color: #007bff; border-color: #007bff; }
+        .route-header { font-size: 16px; font-weight: 700; margin: 18px 0 8px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+        .route-header.r1 { color: #4da3ff; border-color: #4da3ff; }
         .route-header.r2 { color: #e67e22; border-color: #e67e22; }
+        body:not(.dark) .route-header.r1 { color: #007bff; border-color: #007bff; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🚗 Car Collection Route Planner</h1>
+        <div class="header-row">
+            <h1>🚗 Car Collection Route Planner</h1>
+            <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">🌙 Dark mode</button>
+        </div>
         
         <div class="start-end-section">
             <h2>Start & Destination</h2>
@@ -141,6 +182,21 @@
             'WD18 9QQ': 'Tolpits Lane'
         };
 
+        function toggleTheme() {
+            document.body.classList.toggle('dark');
+            const isDark = document.body.classList.contains('dark');
+            document.getElementById('themeBtn').textContent = isDark ? '☀️ Light mode' : '🌙 Dark mode';
+            try { localStorage.setItem('routePlannerDark', isDark ? '1' : '0'); } catch (e) {}
+        }
+
+        // Restore theme preference
+        try {
+            if (localStorage.getItem('routePlannerDark') === '1') {
+                document.body.classList.add('dark');
+                document.getElementById('themeBtn').textContent = '☀️ Light mode';
+            }
+        } catch (e) {}
+
         function getRandomNames(count) {
             const shuffled = [...DRIVER_NAMES].sort(() => Math.random() - 0.5);
             return shuffled.slice(0, count);
@@ -198,7 +254,7 @@
             count.textContent = cars.length;
             
             if (cars.length === 0) {
-                container.innerHTML = '<p style="color: #666;">No cars added yet</p>';
+                container.innerHTML = '<p style="color: var(--text-muted);">No cars added yet</p>';
                 return;
             }
             
@@ -323,7 +379,6 @@
             return route;
         }
 
-        // 2nd Pool = car nearest the key collection
         function chooseSecondPool(carLocations, keysLat, keysLng) {
             if (carLocations.length === 0) return null;
             let best = carLocations[0];
@@ -338,12 +393,10 @@
             return best;
         }
 
-        // Split remaining cars so the two routes from 2nd pool → end are as equal in distance as possible
         function balanceRemainingCars(remaining, pool, endLoc) {
             if (remaining.length === 0) return [[], []];
             if (remaining.length === 1) return [[remaining[0]], []];
 
-            // Sort by distance from 2nd pool (farthest first helps balance)
             const sorted = [...remaining].sort((a, b) => {
                 const da = calculateDistance(pool.lat, pool.lng, a.lat, a.lng);
                 const db = calculateDistance(pool.lat, pool.lng, b.lat, b.lng);
@@ -353,15 +406,7 @@
             let group1 = [];
             let group2 = [];
 
-            // Greedy: assign each car to the group that currently has the smaller estimated route distance
             sorted.forEach(car => {
-                const trial1 = nearestNeighbourRoute([pool, ...group1, car, endLoc]);
-                const trial2 = nearestNeighbourRoute([pool, ...group2, car, endLoc]);
-                const d1 = routeDistance(trial1);
-                const d2 = routeDistance(trial2);
-
-                // Prefer the group that ends up closer in total distance after adding this car
-                // Compare current imbalance
                 const cur1 = group1.length === 0 ? 0 : routeDistance(nearestNeighbourRoute([pool, ...group1, endLoc]));
                 const cur2 = group2.length === 0 ? 0 : routeDistance(nearestNeighbourRoute([pool, ...group2, endLoc]));
 
@@ -372,7 +417,6 @@
                 }
             });
 
-            // If one group is empty, move one car over
             if (group1.length === 0 && group2.length > 0) {
                 group1.push(group2.pop());
             } else if (group2.length === 0 && group1.length > 0) {
@@ -505,16 +549,12 @@
                     const route = [startLoc, keysLoc, ...optimisedCars, endLoc];
                     renderSingleRoute(route, routeDistance(route));
                 } else {
-                    // 1. 2nd Pool = nearest car to keys
                     const secondPool = chooseSecondPool(carLocs, keysCoords.lat, keysCoords.lng);
                     secondPool.isSecondPool = true;
 
                     const remaining = carLocs.filter(c => c.reg !== secondPool.reg);
-
-                    // 2. Split remaining fairly by distance from 2nd pool
                     const [group1, group2] = balanceRemainingCars(remaining, secondPool, endLoc);
 
-                    // Route 1: Start → Keys → 2nd Pool → its share → End
                     const route1 = nearestNeighbourRoute([
                         startLoc,
                         keysLoc,
@@ -523,7 +563,6 @@
                         endLoc
                     ]);
 
-                    // Route 2: 2nd Pool → its share → End
                     const route2 = nearestNeighbourRoute([
                         { ...secondPool, isSecondPool: true, isStartOfRoute2: true },
                         ...group2,
