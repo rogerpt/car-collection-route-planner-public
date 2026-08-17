@@ -86,6 +86,9 @@
         .route-header.r1 { color: #4da3ff; border-color: #4da3ff; }
         .route-header.r2 { color: #e67e22; border-color: #e67e22; }
         body:not(.dark) .route-header.r1 { color: #007bff; border-color: #007bff; }
+        .checkbox-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+        .checkbox-row input[type="checkbox"] { width: 18px; height: 18px; flex: none; cursor: pointer; }
+        .checkbox-row label { margin: 0; font-weight: 600; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -115,7 +118,11 @@
                     </select>
                 </div>
             </div>
-            <p class="note" style="margin-top: 12px;">Fixed order: <strong>Pool start</strong> → <strong>OL2 7BB</strong> (keys) → <strong>nearest car (2nd pool)</strong> → then split</p>
+            <div class="checkbox-row">
+                <input type="checkbox" id="includeKeys" checked onchange="updateKeysNote()">
+                <label for="includeKeys">Include Key Collection (OL2 7BB)</label>
+            </div>
+            <p class="note" id="routeNote" style="margin-top: 12px;">Order: <strong>Pool start</strong> → <strong>OL2 7BB</strong> (keys) → cars → drop-off</p>
         </div>
 
         <div class="input-section">
@@ -135,7 +142,7 @@
             <div id="errorBox" class="error-box"></div>
             <button id="calcBtn" onclick="calculateRoute(false)" style="margin-top: 15px; background: #28a745; width: 100%;">Calculate Most Efficient Route</button>
             <button id="splitBtn" onclick="calculateRoute(true)" class="split-btn" style="display: none;">Split into 2 Routes + 2nd Pool</button>
-            <p id="splitNote" class="note" style="display: none;">Keys first, then nearest car = 2nd pool. From there original pool goes one way, 2nd pool the other — remaining cars split fairly.</p>
+            <p id="splitNote" class="note" style="display: none;">2nd pool = nearest car to keys (or start if keys off). Remaining cars split fairly between both drivers.</p>
             <button onclick="clearAll()" style="margin-top: 10px; background: #6c757d; width: 100%;">Clear All</button>
         </div>
 
@@ -181,6 +188,13 @@
             'EN1 1UB': 'Enfield Prep',
             'WD18 9QQ': 'Tolpits Lane'
         };
+
+        function updateKeysNote() {
+            const on = document.getElementById('includeKeys').checked;
+            document.getElementById('routeNote').innerHTML = on
+                ? 'Order: <strong>Pool start</strong> → <strong>OL2 7BB</strong> (keys) → cars → drop-off'
+                : 'Order: <strong>Pool start</strong> → cars → drop-off <em>(no key collection)</em>';
+        }
 
         function toggleTheme() {
             document.body.classList.toggle('dark');
@@ -339,7 +353,6 @@
             return d;
         }
 
-        // Optimise middle stops only; first and last stay fixed
         function nearestNeighbourRoute(locations) {
             const n = locations.length;
             if (n <= 2) return locations;
@@ -379,12 +392,12 @@
             return route;
         }
 
-        function chooseSecondPool(carLocations, keysLat, keysLng) {
+        function chooseSecondPool(carLocations, refLat, refLng) {
             if (carLocations.length === 0) return null;
             let best = carLocations[0];
             let bestDist = Infinity;
             carLocations.forEach(c => {
-                const d = calculateDistance(keysLat, keysLng, c.lat, c.lng);
+                const d = calculateDistance(refLat, refLng, c.lat, c.lng);
                 if (d < bestDist) {
                     bestDist = d;
                     best = c;
@@ -444,6 +457,7 @@
             const poolStart = document.getElementById('poolStart').value;
             const destSelect = document.getElementById('destinationDropoff');
             const destValue = destSelect.value;
+            const includeKeys = document.getElementById('includeKeys').checked;
             
             if (!poolStart) {
                 alert('Please select a Pool Car Start Location');
@@ -482,9 +496,12 @@
                 const startCoords = await geocodePostcode(poolStart);
                 if (!startCoords) throw new Error('Could not find start postcode: ' + poolStart);
 
-                statusDiv.textContent = 'Geocoding key collection (OL2 7BB)...';
-                const keysCoords = await geocodePostcode('OL2 7BB');
-                if (!keysCoords) throw new Error('Could not find key collection postcode: OL2 7BB');
+                let keysCoords = null;
+                if (includeKeys) {
+                    statusDiv.textContent = 'Geocoding key collection (OL2 7BB)...';
+                    keysCoords = await geocodePostcode('OL2 7BB');
+                    if (!keysCoords) throw new Error('Could not find key collection postcode: OL2 7BB');
+                }
 
                 statusDiv.textContent = 'Geocoding drop-off location...';
                 const destPostcode = destValue.includes('EN3 7SN') ? 'EN3 7SN' : 'EN3 7PX';
@@ -498,12 +515,12 @@
                     isStart: true
                 };
 
-                const keysLoc = {
+                const keysLoc = includeKeys ? {
                     lat: keysCoords.lat, lng: keysCoords.lng,
                     driver: 'KEYS', reg: 'KEY COLLECTION',
                     postcode: keysCoords.postcode || 'OL2 7BB',
                     isKeys: true
-                };
+                } : null;
 
                 const endLoc = {
                     lat: endCoords.lat, lng: endCoords.lng,
@@ -536,34 +553,41 @@
                     }
                 }
 
-                statusDiv.textContent = doSplit ? 'Keys first, then split at nearest car...' : 'Calculating best order...';
+                // Reference point for "nearest car" = keys if included, otherwise start
+                const refLat = includeKeys ? keysCoords.lat : startCoords.lat;
+                const refLng = includeKeys ? keysCoords.lng : startCoords.lng;
+
+                statusDiv.textContent = doSplit ? 'Building split routes...' : 'Calculating best order...';
                 await new Promise(r => setTimeout(r, 200));
 
                 if (!doSplit) {
-                    // Single: Start → Keys → optimised cars → End  (keys always second)
-                    const optimisedCars = carLocs.length === 0 ? [] : (() => {
-                        const r = nearestNeighbourRoute([keysLoc, ...carLocs, endLoc]);
-                        return r.slice(1, -1);
-                    })();
-
-                    const route = [startLoc, keysLoc, ...optimisedCars, endLoc];
+                    // Single route
+                    let route;
+                    if (includeKeys) {
+                        const optimisedCars = carLocs.length === 0 ? [] : nearestNeighbourRoute([keysLoc, ...carLocs, endLoc]).slice(1, -1);
+                        route = [startLoc, keysLoc, ...optimisedCars, endLoc];
+                    } else {
+                        const optimisedCars = carLocs.length === 0 ? [] : nearestNeighbourRoute([startLoc, ...carLocs, endLoc]).slice(1, -1);
+                        route = [startLoc, ...optimisedCars, endLoc];
+                    }
                     renderSingleRoute(route, routeDistance(route));
                 } else {
-                    // 1. 2nd pool = nearest car to keys
-                    const secondPool = chooseSecondPool(carLocs, keysCoords.lat, keysCoords.lng);
+                    const secondPool = chooseSecondPool(carLocs, refLat, refLng);
                     const poolStop = { ...secondPool, isSecondPool: true };
 
                     const remaining = carLocs.filter(c => c.reg !== secondPool.reg);
                     const [group1, group2] = balanceRemainingCars(remaining, secondPool, endLoc);
 
-                    // Route 1 (original pool): Start → Keys → 2nd Pool → group1 (optimised) → End
-                    // Keys and 2nd pool are FIXED in that order — only group1 is optimised after the pool
+                    // Route 1: Start → [Keys if on] → 2nd Pool → group1 → End
                     const afterPool1 = group1.length === 0
                         ? [endLoc]
                         : nearestNeighbourRoute([poolStop, ...group1, endLoc]).slice(1);
-                    const route1 = [startLoc, keysLoc, poolStop, ...afterPool1];
 
-                    // Route 2 (2nd pool driver): 2nd Pool → group2 (optimised) → End
+                    const route1 = includeKeys
+                        ? [startLoc, keysLoc, poolStop, ...afterPool1]
+                        : [startLoc, poolStop, ...afterPool1];
+
+                    // Route 2: 2nd Pool → group2 → End
                     const route2 = group2.length === 0
                         ? [{ ...poolStop, isStartOfRoute2: true }, endLoc]
                         : nearestNeighbourRoute([{ ...poolStop, isStartOfRoute2: true }, ...group2, endLoc]);
@@ -571,7 +595,7 @@
                     const dist1 = routeDistance(route1);
                     const dist2 = routeDistance(route2);
 
-                    renderSplitRoutes(route1, route2, dist1, dist2, secondPool);
+                    renderSplitRoutes(route1, route2, dist1, dist2, secondPool, includeKeys);
                 }
 
                 document.getElementById('mapSection').style.display = 'block';
@@ -654,7 +678,7 @@
             document.getElementById('totalDistance').innerHTML = `Total distance: <strong>${totalDist.toFixed(1)} miles</strong> (straight-line estimate)`;
         }
 
-        function renderSplitRoutes(route1, route2, dist1, dist2, secondPool) {
+        function renderSplitRoutes(route1, route2, dist1, dist2, secondPool, includeKeys) {
             if (map) map.remove();
             map = L.map('map').setView([route1[0].lat, route1[0].lng], 9);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -686,7 +710,9 @@
             map.fitBounds(allPoints, { padding: [40, 40] });
             setTimeout(() => map.invalidateSize(), 200);
 
-            document.getElementById('routeTitle').textContent = 'Split Routes (keys first, then 2nd pool)';
+            document.getElementById('routeTitle').textContent = includeKeys
+                ? 'Split Routes (keys first, then 2nd pool)'
+                : 'Split Routes (no keys — 2nd pool nearest start)';
 
             document.getElementById('navButtons').innerHTML = `
                 <a class="nav-btn waze-btn" href="${wazeUrl(route1[0].lat, route1[0].lng)}" target="_blank" rel="noopener">▶ Route 1 start (Waze)</a>
@@ -718,8 +744,8 @@
             let instr = `<div class="instructions"><h4>Route 1 – Original pool car</h4>`;
             route1.forEach((loc, index) => {
                 if (loc.isStart) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Pool car starts at <strong>${loc.reg}</strong> (${loc.postcode}).</div>`;
-                else if (loc.isKeys) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Collect keys from <strong>${loc.postcode}</strong> (must be before any car).</div>`;
-                else if (loc.isSecondPool) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Reach nearest car to keys = <strong>2nd Pool</strong>: <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong>. Routes split here.</div>`;
+                else if (loc.isKeys) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Collect keys from <strong>${loc.postcode}</strong>.</div>`;
+                else if (loc.isSecondPool) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Reach <strong>2nd Pool</strong>: <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong>. Routes split here.</div>`;
                 else if (loc.isEnd) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Drop the car(s) off at <strong>${loc.reg}</strong>.</div>`;
                 else instr += `<div class="instruction-line"><strong>${index + 1}.</strong> <strong>${loc.driver}</strong> collects <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong>.</div>`;
             });
@@ -734,11 +760,14 @@
             document.getElementById('writtenInstructions').innerHTML = instr;
 
             const diff = Math.abs(dist1 - dist2).toFixed(1);
+            const orderNote = includeKeys
+                ? `Start → Keys → 2nd Pool (${secondPool.reg}), then split fairly`
+                : `Start → 2nd Pool (${secondPool.reg}, nearest to start), then split fairly — no keys`;
             document.getElementById('totalDistance').innerHTML = `
                 Route 1: <strong>${dist1.toFixed(1)} miles</strong> &nbsp;|&nbsp;
                 Route 2: <strong>${dist2.toFixed(1)} miles</strong> &nbsp;|&nbsp;
                 Difference: <strong>${diff} miles</strong>
-                <br><span class="note">Order locked: Start → Keys → 2nd Pool (${secondPool.reg}), then split fairly</span>
+                <br><span class="note">${orderNote}</span>
             `;
         }
 
@@ -754,6 +783,7 @@
 
         renderCarList();
         updateSplitButton();
+        updateKeysNote();
     </script>
 </body>
 </html>
