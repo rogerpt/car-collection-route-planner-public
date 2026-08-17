@@ -334,7 +334,8 @@
             return null;
         }
 
-        function calculateDistance(lat1, lon1, lat2, lon2) {
+        // Straight-line (used only for ordering / nearest-neighbour)
+        function haversineMiles(lat1, lon1, lat2, lon2) {
             const R = 3958.8;
             const dLat = (lat2 - lat1) * Math.PI / 180;
             const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -345,12 +346,49 @@
             return R * c;
         }
 
-        function routeDistance(route) {
-            let d = 0;
-            for (let i = 0; i < route.length - 1; i++) {
-                d += calculateDistance(route[i].lat, route[i].lng, route[i+1].lat, route[i+1].lng);
+        // Real road distance + geometry via OSRM (public server)
+        async function getRoadRoute(locations) {
+            if (!locations || locations.length < 2) {
+                return { miles: 0, minutes: 0, latlngs: locations ? locations.map(l => [l.lat, l.lng]) : [] };
             }
-            return d;
+
+            // OSRM expects lon,lat
+            const coords = locations.map(l => `${l.lng},${l.lat}`).join(';');
+            const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 12000);
+
+            try {
+                const response = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeout);
+                const data = await response.json();
+
+                if (data.code === 'Ok' && data.routes && data.routes[0]) {
+                    const r = data.routes[0];
+                    const miles = r.distance / 1609.344;
+                    const minutes = r.duration / 60;
+                    const latlngs = (r.geometry && r.geometry.coordinates)
+                        ? r.geometry.coordinates.map(c => [c[1], c[0]])
+                        : locations.map(l => [l.lat, l.lng]);
+                    return { miles, minutes, latlngs };
+                }
+            } catch (e) {
+                clearTimeout(timeout);
+                console.warn('OSRM failed, falling back to straight-line', e);
+            }
+
+            // Fallback: straight-line
+            let miles = 0;
+            for (let i = 0; i < locations.length - 1; i++) {
+                miles += haversineMiles(locations[i].lat, locations[i].lng, locations[i+1].lat, locations[i+1].lng);
+            }
+            return {
+                miles,
+                minutes: null,
+                latlngs: locations.map(l => [l.lat, l.lng]),
+                fallback: true
+            };
         }
 
         function nearestNeighbourRoute(locations) {
@@ -373,7 +411,7 @@
                 
                 for (let j = 0; j < middle.length; j++) {
                     if (!visited[j]) {
-                        const dist = calculateDistance(current.lat, current.lng, middle[j].lat, middle[j].lng);
+                        const dist = haversineMiles(current.lat, current.lng, middle[j].lat, middle[j].lng);
                         if (dist < minDist) {
                             minDist = dist;
                             nearest = j;
@@ -397,7 +435,7 @@
             let best = carLocations[0];
             let bestDist = Infinity;
             carLocations.forEach(c => {
-                const d = calculateDistance(refLat, refLng, c.lat, c.lng);
+                const d = haversineMiles(refLat, refLng, c.lat, c.lng);
                 if (d < bestDist) {
                     bestDist = d;
                     best = c;
@@ -411,17 +449,25 @@
             if (remaining.length === 1) return [[remaining[0]], []];
 
             const sorted = [...remaining].sort((a, b) => {
-                const da = calculateDistance(pool.lat, pool.lng, a.lat, a.lng);
-                const db = calculateDistance(pool.lat, pool.lng, b.lat, b.lng);
+                const da = haversineMiles(pool.lat, pool.lng, a.lat, a.lng);
+                const db = haversineMiles(pool.lat, pool.lng, b.lat, b.lng);
                 return db - da;
             });
 
             let group1 = [];
             let group2 = [];
 
+            function straightDist(pts) {
+                let d = 0;
+                for (let i = 0; i < pts.length - 1; i++) {
+                    d += haversineMiles(pts[i].lat, pts[i].lng, pts[i+1].lat, pts[i+1].lng);
+                }
+                return d;
+            }
+
             sorted.forEach(car => {
-                const cur1 = group1.length === 0 ? 0 : routeDistance(nearestNeighbourRoute([pool, ...group1, endLoc]));
-                const cur2 = group2.length === 0 ? 0 : routeDistance(nearestNeighbourRoute([pool, ...group2, endLoc]));
+                const cur1 = group1.length === 0 ? 0 : straightDist(nearestNeighbourRoute([pool, ...group1, endLoc]));
+                const cur2 = group2.length === 0 ? 0 : straightDist(nearestNeighbourRoute([pool, ...group2, endLoc]));
 
                 if (cur1 <= cur2) {
                     group1.push(car);
@@ -451,6 +497,15 @@
             let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
             if (waypoints) url += `&waypoints=${waypoints}`;
             return url;
+        }
+
+        function formatDuration(minutes) {
+            if (minutes == null || isNaN(minutes)) return '';
+            const m = Math.round(minutes);
+            if (m < 60) return `~${m} min drive`;
+            const h = Math.floor(m / 60);
+            const rem = m % 60;
+            return rem === 0 ? `~${h} hr drive` : `~${h} hr ${rem} min drive`;
         }
 
         async function calculateRoute(doSplit) {
@@ -553,15 +608,13 @@
                     }
                 }
 
-                // Reference point for "nearest car" = keys if included, otherwise start
                 const refLat = includeKeys ? keysCoords.lat : startCoords.lat;
                 const refLng = includeKeys ? keysCoords.lng : startCoords.lng;
 
-                statusDiv.textContent = doSplit ? 'Building split routes...' : 'Calculating best order...';
-                await new Promise(r => setTimeout(r, 200));
+                statusDiv.textContent = doSplit ? 'Ordering stops...' : 'Ordering stops...';
+                await new Promise(r => setTimeout(r, 100));
 
                 if (!doSplit) {
-                    // Single route
                     let route;
                     if (includeKeys) {
                         const optimisedCars = carLocs.length === 0 ? [] : nearestNeighbourRoute([keysLoc, ...carLocs, endLoc]).slice(1, -1);
@@ -570,7 +623,10 @@
                         const optimisedCars = carLocs.length === 0 ? [] : nearestNeighbourRoute([startLoc, ...carLocs, endLoc]).slice(1, -1);
                         route = [startLoc, ...optimisedCars, endLoc];
                     }
-                    renderSingleRoute(route, routeDistance(route));
+
+                    statusDiv.textContent = 'Getting road distance...';
+                    const road = await getRoadRoute(route);
+                    renderSingleRoute(route, road);
                 } else {
                     const secondPool = chooseSecondPool(carLocs, refLat, refLng);
                     const poolStop = { ...secondPool, isSecondPool: true };
@@ -578,7 +634,6 @@
                     const remaining = carLocs.filter(c => c.reg !== secondPool.reg);
                     const [group1, group2] = balanceRemainingCars(remaining, secondPool, endLoc);
 
-                    // Route 1: Start → [Keys if on] → 2nd Pool → group1 → End
                     const afterPool1 = group1.length === 0
                         ? [endLoc]
                         : nearestNeighbourRoute([poolStop, ...group1, endLoc]).slice(1);
@@ -587,15 +642,17 @@
                         ? [startLoc, keysLoc, poolStop, ...afterPool1]
                         : [startLoc, poolStop, ...afterPool1];
 
-                    // Route 2: 2nd Pool → group2 → End
                     const route2 = group2.length === 0
                         ? [{ ...poolStop, isStartOfRoute2: true }, endLoc]
                         : nearestNeighbourRoute([{ ...poolStop, isStartOfRoute2: true }, ...group2, endLoc]);
 
-                    const dist1 = routeDistance(route1);
-                    const dist2 = routeDistance(route2);
+                    statusDiv.textContent = 'Getting road distances...';
+                    const [road1, road2] = await Promise.all([
+                        getRoadRoute(route1),
+                        getRoadRoute(route2)
+                    ]);
 
-                    renderSplitRoutes(route1, route2, dist1, dist2, secondPool, includeKeys);
+                    renderSplitRoutes(route1, route2, road1, road2, secondPool, includeKeys);
                 }
 
                 document.getElementById('mapSection').style.display = 'block';
@@ -624,7 +681,7 @@
             routeLines = [];
         }
 
-        function renderSingleRoute(route, totalDist) {
+        function renderSingleRoute(route, road) {
             if (map) map.remove();
             map = L.map('map').setView([route[0].lat, route[0].lng], 9);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -644,7 +701,7 @@
                 markers.push(marker);
             });
 
-            const latlngs = route.map(loc => [loc.lat, loc.lng]);
+            const latlngs = road.latlngs && road.latlngs.length > 1 ? road.latlngs : route.map(loc => [loc.lat, loc.lng]);
             const line = L.polyline(latlngs, { color: '#007bff', weight: 4 }).addTo(map);
             routeLines.push(line);
             map.fitBounds(latlngs, { padding: [40, 40] });
@@ -675,10 +732,13 @@
             instructions += '</div>';
             document.getElementById('writtenInstructions').innerHTML = instructions;
 
-            document.getElementById('totalDistance').innerHTML = `Total distance: <strong>${totalDist.toFixed(1)} miles</strong> (straight-line estimate)`;
+            const distLabel = road.fallback ? 'straight-line estimate' : 'road distance';
+            const timeLabel = road.minutes != null ? ` · ${formatDuration(road.minutes)}` : '';
+            document.getElementById('totalDistance').innerHTML =
+                `Total: <strong>${road.miles.toFixed(1)} miles</strong> (${distLabel})${timeLabel}`;
         }
 
-        function renderSplitRoutes(route1, route2, dist1, dist2, secondPool, includeKeys) {
+        function renderSplitRoutes(route1, route2, road1, road2, secondPool, includeKeys) {
             if (map) map.remove();
             map = L.map('map').setView([route1[0].lat, route1[0].lng], 9);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -688,8 +748,10 @@
             clearMapLayers();
 
             const allPoints = [];
-            [route1, route2].forEach((route, rIdx) => {
-                const color = rIdx === 0 ? '#007bff' : '#e67e22';
+            [
+                { route: route1, road: road1, color: '#007bff' },
+                { route: route2, road: road2, color: '#e67e22' }
+            ].forEach(({ route, road, color }) => {
                 route.forEach((loc) => {
                     let label = '';
                     if (loc.isStart) label = `<strong>START – ${loc.reg}</strong><br>${loc.postcode}`;
@@ -702,9 +764,10 @@
                     markers.push(marker);
                     allPoints.push([loc.lat, loc.lng]);
                 });
-                const latlngs = route.map(loc => [loc.lat, loc.lng]);
+                const latlngs = road.latlngs && road.latlngs.length > 1 ? road.latlngs : route.map(loc => [loc.lat, loc.lng]);
                 const line = L.polyline(latlngs, { color, weight: 4, opacity: 0.85 }).addTo(map);
                 routeLines.push(line);
+                latlngs.forEach(p => allPoints.push(p));
             });
 
             map.fitBounds(allPoints, { padding: [40, 40] });
@@ -759,15 +822,19 @@
 
             document.getElementById('writtenInstructions').innerHTML = instr;
 
-            const diff = Math.abs(dist1 - dist2).toFixed(1);
+            const diff = Math.abs(road1.miles - road2.miles).toFixed(1);
+            const t1 = road1.minutes != null ? ` (${formatDuration(road1.minutes)})` : '';
+            const t2 = road2.minutes != null ? ` (${formatDuration(road2.minutes)})` : '';
+            const usedFallback = road1.fallback || road2.fallback;
             const orderNote = includeKeys
                 ? `Start → Keys → 2nd Pool (${secondPool.reg}), then split fairly`
                 : `Start → 2nd Pool (${secondPool.reg}, nearest to start), then split fairly — no keys`;
+
             document.getElementById('totalDistance').innerHTML = `
-                Route 1: <strong>${dist1.toFixed(1)} miles</strong> &nbsp;|&nbsp;
-                Route 2: <strong>${dist2.toFixed(1)} miles</strong> &nbsp;|&nbsp;
+                Route 1: <strong>${road1.miles.toFixed(1)} miles</strong>${t1} &nbsp;|&nbsp;
+                Route 2: <strong>${road2.miles.toFixed(1)} miles</strong>${t2} &nbsp;|&nbsp;
                 Difference: <strong>${diff} miles</strong>
-                <br><span class="note">${orderNote}</span>
+                <br><span class="note">${orderNote}${usedFallback ? ' · (road routing unavailable — straight-line used)' : ' · road distances via OSRM'}</span>
             `;
         }
 
