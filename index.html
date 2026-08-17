@@ -115,7 +115,7 @@
                     </select>
                 </div>
             </div>
-            <p class="note" style="margin-top: 12px;">Route: <strong>Pool start</strong> → <strong>OL2 7BB</strong> (Key Collection) → car collections → drop-off</p>
+            <p class="note" style="margin-top: 12px;">Fixed order: <strong>Pool start</strong> → <strong>OL2 7BB</strong> (keys) → <strong>nearest car (2nd pool)</strong> → then split</p>
         </div>
 
         <div class="input-section">
@@ -135,7 +135,7 @@
             <div id="errorBox" class="error-box"></div>
             <button id="calcBtn" onclick="calculateRoute(false)" style="margin-top: 15px; background: #28a745; width: 100%;">Calculate Most Efficient Route</button>
             <button id="splitBtn" onclick="calculateRoute(true)" class="split-btn" style="display: none;">Split into 2 Routes + 2nd Pool</button>
-            <p id="splitNote" class="note" style="display: none;">More than 3 cars: 2nd pool = nearest car to keys. Remaining cars are then split fairly by distance between both drivers.</p>
+            <p id="splitNote" class="note" style="display: none;">Keys first, then nearest car = 2nd pool. From there original pool goes one way, 2nd pool the other — remaining cars split fairly.</p>
             <button onclick="clearAll()" style="margin-top: 10px; background: #6c757d; width: 100%;">Clear All</button>
         </div>
 
@@ -189,7 +189,6 @@
             try { localStorage.setItem('routePlannerDark', isDark ? '1' : '0'); } catch (e) {}
         }
 
-        // Restore theme preference
         try {
             if (localStorage.getItem('routePlannerDark') === '1') {
                 document.body.classList.add('dark');
@@ -340,6 +339,7 @@
             return d;
         }
 
+        // Optimise middle stops only; first and last stay fixed
         function nearestNeighbourRoute(locations) {
             const n = locations.length;
             if (n <= 2) return locations;
@@ -536,38 +536,37 @@
                     }
                 }
 
-                statusDiv.textContent = doSplit ? 'Balancing routes from 2nd pool...' : 'Calculating best order...';
+                statusDiv.textContent = doSplit ? 'Keys first, then split at nearest car...' : 'Calculating best order...';
                 await new Promise(r => setTimeout(r, 200));
 
                 if (!doSplit) {
+                    // Single: Start → Keys → optimised cars → End  (keys always second)
                     const optimisedCars = carLocs.length === 0 ? [] : (() => {
-                        const withKeys = [keysLoc, ...carLocs, endLoc];
-                        const r = nearestNeighbourRoute(withKeys);
+                        const r = nearestNeighbourRoute([keysLoc, ...carLocs, endLoc]);
                         return r.slice(1, -1);
                     })();
 
                     const route = [startLoc, keysLoc, ...optimisedCars, endLoc];
                     renderSingleRoute(route, routeDistance(route));
                 } else {
+                    // 1. 2nd pool = nearest car to keys
                     const secondPool = chooseSecondPool(carLocs, keysCoords.lat, keysCoords.lng);
-                    secondPool.isSecondPool = true;
+                    const poolStop = { ...secondPool, isSecondPool: true };
 
                     const remaining = carLocs.filter(c => c.reg !== secondPool.reg);
                     const [group1, group2] = balanceRemainingCars(remaining, secondPool, endLoc);
 
-                    const route1 = nearestNeighbourRoute([
-                        startLoc,
-                        keysLoc,
-                        { ...secondPool, isSecondPool: true },
-                        ...group1,
-                        endLoc
-                    ]);
+                    // Route 1 (original pool): Start → Keys → 2nd Pool → group1 (optimised) → End
+                    // Keys and 2nd pool are FIXED in that order — only group1 is optimised after the pool
+                    const afterPool1 = group1.length === 0
+                        ? [endLoc]
+                        : nearestNeighbourRoute([poolStop, ...group1, endLoc]).slice(1);
+                    const route1 = [startLoc, keysLoc, poolStop, ...afterPool1];
 
-                    const route2 = nearestNeighbourRoute([
-                        { ...secondPool, isSecondPool: true, isStartOfRoute2: true },
-                        ...group2,
-                        endLoc
-                    ]);
+                    // Route 2 (2nd pool driver): 2nd Pool → group2 (optimised) → End
+                    const route2 = group2.length === 0
+                        ? [{ ...poolStop, isStartOfRoute2: true }, endLoc]
+                        : nearestNeighbourRoute([{ ...poolStop, isStartOfRoute2: true }, ...group2, endLoc]);
 
                     const dist1 = routeDistance(route1);
                     const dist2 = routeDistance(route2);
@@ -687,7 +686,7 @@
             map.fitBounds(allPoints, { padding: [40, 40] });
             setTimeout(() => map.invalidateSize(), 200);
 
-            document.getElementById('routeTitle').textContent = 'Split Routes (balanced after 2nd pool)';
+            document.getElementById('routeTitle').textContent = 'Split Routes (keys first, then 2nd pool)';
 
             document.getElementById('navButtons').innerHTML = `
                 <a class="nav-btn waze-btn" href="${wazeUrl(route1[0].lat, route1[0].lng)}" target="_blank" rel="noopener">▶ Route 1 start (Waze)</a>
@@ -696,7 +695,7 @@
                 <a class="nav-btn gmaps-btn" href="${googleMapsMultiStopUrl(route2)}" target="_blank" rel="noopener">▶ Route 2 in Google Maps</a>
             `;
 
-            let stepsHtml = `<div class="route-header r1">Route 1 – Pool Driver 1</div>`;
+            let stepsHtml = `<div class="route-header r1">Route 1 – Original pool car</div>`;
             stepsHtml += route1.map((loc, index) => {
                 const wazeLink = `<a class="waze-small" href="${wazeUrl(loc.lat, loc.lng)}" target="_blank" rel="noopener">Waze</a>`;
                 if (loc.isStart) return `<div class="route-step"><span><strong>${index + 1}. START – ${loc.reg}</strong> — ${loc.postcode}</span> ${wazeLink}</div>`;
@@ -706,7 +705,7 @@
                 return `<div class="route-step"><span>${index + 1}. <strong>${loc.driver}</strong> — ${loc.reg} — ${loc.postcode}</span> ${wazeLink}</div>`;
             }).join('');
 
-            stepsHtml += `<div class="route-header r2">Route 2 – Pool Driver 2 (starts at 2nd Pool)</div>`;
+            stepsHtml += `<div class="route-header r2">Route 2 – 2nd pool car (other direction)</div>`;
             stepsHtml += route2.map((loc, index) => {
                 const wazeLink = `<a class="waze-small" href="${wazeUrl(loc.lat, loc.lng)}" target="_blank" rel="noopener">Waze</a>`;
                 if (loc.isSecondPool || loc.isStartOfRoute2) return `<div class="route-step"><span><strong>${index + 1}. 2ND POOL (start)</strong> — ${loc.reg} — ${loc.postcode} <span class="pool-badge">2nd Pool</span></span> ${wazeLink}</div>`;
@@ -716,17 +715,17 @@
 
             document.getElementById('routeSteps').innerHTML = stepsHtml;
 
-            let instr = `<div class="instructions"><h4>Route 1 – Pool Driver 1</h4>`;
+            let instr = `<div class="instructions"><h4>Route 1 – Original pool car</h4>`;
             route1.forEach((loc, index) => {
                 if (loc.isStart) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Pool car starts at <strong>${loc.reg}</strong> (${loc.postcode}).</div>`;
-                else if (loc.isKeys) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Collect keys from <strong>${loc.postcode}</strong> (Key Collection).</div>`;
-                else if (loc.isSecondPool) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Collect / hand over at the <strong>2nd Pool</strong>: <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong>.</div>`;
+                else if (loc.isKeys) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Collect keys from <strong>${loc.postcode}</strong> (must be before any car).</div>`;
+                else if (loc.isSecondPool) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Reach nearest car to keys = <strong>2nd Pool</strong>: <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong>. Routes split here.</div>`;
                 else if (loc.isEnd) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Drop the car(s) off at <strong>${loc.reg}</strong>.</div>`;
                 else instr += `<div class="instruction-line"><strong>${index + 1}.</strong> <strong>${loc.driver}</strong> collects <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong>.</div>`;
             });
-            instr += `</div><div class="instructions route2"><h4>Route 2 – Pool Driver 2</h4>`;
+            instr += `</div><div class="instructions route2"><h4>Route 2 – 2nd pool car (other direction)</h4>`;
             route2.forEach((loc, index) => {
-                if (loc.isSecondPool || loc.isStartOfRoute2) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Start at the <strong>2nd Pool</strong>: <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong>.</div>`;
+                if (loc.isSecondPool || loc.isStartOfRoute2) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Start at the <strong>2nd Pool</strong>: <strong>${loc.reg}</strong> at <strong>${loc.postcode}</strong> and go the other way.</div>`;
                 else if (loc.isEnd) instr += `<div class="instruction-line"><strong>${index + 1}.</strong> Drop the car(s) off at <strong>${loc.reg}</strong>.</div>`;
                 else instr += `<div class="instruction-line"><strong>${index + 1}.</strong> <strong>${loc.driver}</strong> collects <strong>${loc.reg}</strong> from <strong>${loc.postcode}</strong>.</div>`;
             });
@@ -739,7 +738,7 @@
                 Route 1: <strong>${dist1.toFixed(1)} miles</strong> &nbsp;|&nbsp;
                 Route 2: <strong>${dist2.toFixed(1)} miles</strong> &nbsp;|&nbsp;
                 Difference: <strong>${diff} miles</strong>
-                <br><span class="note">2nd Pool (nearest to keys): ${secondPool.reg} (${secondPool.postcode}) — remaining cars split for fair distance</span>
+                <br><span class="note">Order locked: Start → Keys → 2nd Pool (${secondPool.reg}), then split fairly</span>
             `;
         }
 
