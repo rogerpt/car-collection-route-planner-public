@@ -1,7 +1,123 @@
 <!DOCTYPE html>
-<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Car Collection Route Planner</title>
-<script>location.replace('https://cdn.jsdelivr.net/gh/rogerpt/car-collection-route-planner-public@a39226b2c733d25ace36dc794c328760a82b962a/index.html');</script>
-</head><body style="font-family:sans-serif;padding:40px;text-align:center">
-<p>Loading app…</p>
-<p><a href="https://cdn.jsdelivr.net/gh/rogerpt/car-collection-route-planner-public@a39226b2c733d25ace36dc794c328760a82b962a/index.html">Open app</a></p>
-</body></html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Car Collection Route Planner</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 40px; text-align: center; color: #333; }
+  .spinner { display: inline-block; width: 32px; height: 32px; border: 3px solid #ddd; border-top-color: #007bff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<p class="spinner"></p>
+<p>Loading route planner…</p>
+<script>
+(async function () {
+  const SRC = 'https://cdn.jsdelivr.net/gh/rogerpt/car-collection-route-planner-public@a39226b2c733d25ace36dc794c328760a82b962a/index.html';
+  try {
+    const res = await fetch(SRC);
+    if (!res.ok) throw new Error('Failed to load app');
+    let html = await res.text();
+
+    const extraCss = `
+        .car-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+        .order-btn { background: #6c757d; padding: 5px 10px; font-size: 14px; line-height: 1; min-width: 36px; }
+        .order-btn:hover { background: #5a6268; }
+        .order-btn:disabled { background: #bbb; cursor: not-allowed; opacity: 0.5; }
+        .car-info { flex: 1; min-width: 0; }
+        .car-num { color: var(--text-muted); font-size: 13px; margin-right: 6px; }
+`;
+    html = html.replace('</style>', extraCss + '</style>');
+
+    const uiBlock = `
+            <p class="note" id="reorderHint" style="display: none;">Use ↑ ↓ to change collection order. Tick “Use my list order” to keep this order when calculating.</p>
+            <div class="checkbox-row" id="manualOrderRow" style="display: none; margin-top: 10px;">
+                <input type="checkbox" id="useManualOrder">
+                <label for="useManualOrder">Use my list order (don’t auto-optimise)</label>
+            </div>
+`;
+    html = html.replace('<div id="errorBox" class="error-box"></div>', uiBlock + '<div id="errorBox" class="error-box"></div>');
+
+    const patchScript = `
+<script>
+(function() {
+  function patch() {
+    if (typeof cars === 'undefined' || typeof renderCarList !== 'function') {
+      setTimeout(patch, 30);
+      return;
+    }
+
+    window.moveCarUp = function(index) {
+      if (index <= 0) return;
+      var tmp = cars[index - 1];
+      cars[index - 1] = cars[index];
+      cars[index] = tmp;
+      renderCarList();
+    };
+
+    window.moveCarDown = function(index) {
+      if (index >= cars.length - 1) return;
+      var tmp = cars[index + 1];
+      cars[index + 1] = cars[index];
+      cars[index] = tmp;
+      renderCarList();
+    };
+
+    window.renderCarList = function() {
+      var container = document.getElementById('carList');
+      var count = document.getElementById('carCount');
+      if (count) count.textContent = cars.length;
+
+      var hint = document.getElementById('reorderHint');
+      var row = document.getElementById('manualOrderRow');
+      var show = cars.length > 1;
+      if (hint) hint.style.display = show ? 'block' : 'none';
+      if (row) row.style.display = show ? 'flex' : 'none';
+
+      if (cars.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-muted);">No cars added yet</p>';
+        return;
+      }
+
+      container.innerHTML = cars.map(function(car, index) {
+        return '<div class="car-item">' +
+          '<div class="car-info"><span class="car-num">' + (index + 1) + '.</span> <strong>' + car.driver + '</strong> — ' + car.reg + ' — ' + car.postcode + '</div>' +
+          '<div class="car-actions">' +
+            '<button class="order-btn" onclick="moveCarUp(' + index + ')" ' + (index === 0 ? 'disabled' : '') + ' title="Move up">↑</button>' +
+            '<button class="order-btn" onclick="moveCarDown(' + index + ')" ' + (index === cars.length - 1 ? 'disabled' : '') + ' title="Move down">↓</button>' +
+            '<button class="delete-btn" onclick="deleteCar(' + index + ')">Remove</button>' +
+          '</div></div>';
+      }).join('');
+    };
+
+    if (typeof nearestNeighbourRoute === 'function') {
+      var _origNN = nearestNeighbourRoute;
+      window.nearestNeighbourRoute = function(locations) {
+        var manual = document.getElementById('useManualOrder');
+        if (manual && manual.checked && locations && locations.length > 2) {
+          return locations;
+        }
+        return _origNN.apply(this, arguments);
+      };
+    }
+
+    renderCarList();
+  }
+  patch();
+})();
+<\/script>
+`;
+    html = html.replace('</body>', patchScript + '</body>');
+
+    document.open();
+    document.write(html);
+    document.close();
+  } catch (e) {
+    document.body.innerHTML = '<p>Could not load app.</p><p><a href="' + SRC + '">Open previous version</a></p><pre>' + e + '</pre>';
+  }
+})();
+</script>
+</body>
+</html>
